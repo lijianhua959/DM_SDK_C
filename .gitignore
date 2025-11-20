@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+
+# Custom add
+DM_SDK_C/CMakeLists.txt
+CMakeLists.txt
+CMaKeSettings.json
