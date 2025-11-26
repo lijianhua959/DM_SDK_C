@@ -4264,7 +4264,7 @@ LWReturnCode ljhNS::DeviceHandle::SetOutputDO(int32_t channel, int32_t value)
 
 	CommandSFrame command{ C_SetOutputDO };
 
-	char val[2] = { channel, value };
+	char val[2] = { (char)channel, (char)value };
 	command.setArgField(val, 2);
 
 	return ExecuteCommand(command);
@@ -8028,4 +8028,4 @@ LW_C_API LWReturnCode LWSetSecurityConfigFileFromBuffer(LWDeviceHandle handle, i
 }
 
 
-#endif LW_ZHONGRILONG_PROJ
+#endif //LW_ZHONGRILONG_PROJ

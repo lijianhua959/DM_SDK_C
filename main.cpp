@@ -2,8 +2,8 @@
 #include <fstream>
 #include <chrono>
 #include <ctime>
+#include <thread>
 #include "LWDMApi.h"
-#include <windows.h>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/core.hpp>
 
@@ -36,7 +36,6 @@ void showMat_Thre(cv::Mat input, int Thre, int waitKey = 50) {
 
 int main()
 {
-	std::cout << "Hello CMake.  " << _MSC_VER << std::endl;
 	//auto file = fopen("C:/Users/12267/Desktop/DATA/tempf/3-rgb_save.rgb", "rb");
 	//auto data = new char[1200*1600*2];
 	//fread(data, 3840000, 1, file);
@@ -342,7 +341,7 @@ int main()
 */
 	// 数据读取
 	printf("\n\n");
-	Sleep(3000);
+	std::this_thread::sleep_for(std::chrono::seconds(3));
 	LWFrameData frame;
 	int64_t t0 = 0;
 	int64_t t1 = 0;

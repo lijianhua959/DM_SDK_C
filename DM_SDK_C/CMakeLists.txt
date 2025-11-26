@@ -53,6 +53,7 @@ elseif(UNIX) # Linux 平台
 	
 	set(OpenCV_DIR /home/ljh/third_party_libs/opencv/linux/lib/cmake/opencv4)
 	set(OPENSSL_ROOT_DIR /home/ljh/third_party_libs/openssl/linux)
+	set(Update_ROOT_DIR /home/ljh/third_party_libs/firmware_update/linux)
 
 	# set(OpenCV_DIR /home/ljh/third_party_libs/opencv/arm7.5/lib/cmake/opencv4)
 	# set(OPENSSL_ROOT_DIR /home/ljh/third_party_libs/openssl/arm7.5)
@@ -66,6 +67,7 @@ elseif(UNIX) # Linux 平台
 
 	include_directories(/usr/include/eigen3)
 	include_directories(${OPENSSL_INCLUDE_DIR})
+	include_directories(${Update_ROOT_DIR}/include)
 
 	# 将源代码添加到此项目的动态库。
 	add_library (dm_c_sdk SHARED "LWDMApi.cpp" "LWDMApi.h" "LWDMType.h")
@@ -74,7 +76,8 @@ elseif(UNIX) # Linux 平台
 	target_link_libraries(dm_c_sdk 
 	${OpenCV_LIBS} 
 	${OPENSSL_CRYPTO_LIBRARIES}
-	libMasterUpdate
+	${Update_ROOT_DIR}/lib/libssh2.a
+	${Update_ROOT_DIR}/lib/libfirmware_update.a
 	)
 
 	# 设置版本号
