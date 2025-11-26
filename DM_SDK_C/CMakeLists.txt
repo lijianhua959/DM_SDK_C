@@ -42,7 +42,7 @@ if(WIN32)# Windows 平台
 	${OpenSSL_ROOT_DIR}/lib/libcrypto.lib 
 	${OpenSSL_ROOT_DIR}/lib/libssl.lib 
 	${Update_ROOT_DIR}/lib/libssh2.lib 
-	${Update_ROOT_DIR}/lib/libMasterUpdate.lib 
+	${Update_ROOT_DIR}/lib/firmware_update.lib 
 	crypt32.lib
 	)
 
