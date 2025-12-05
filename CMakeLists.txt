@@ -18,7 +18,7 @@ project ("DMSDK")
 # 设置版本号
 set(MAJOR_VAR 1)
 set(MINOR_VAR 2)
-set(PATCH_VAR 0)
+set(PATCH_VAR 1)
 set(REVISION_VAR 0)
 # 设置优化等级
 #set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -O3  -Wall")
@@ -31,7 +31,7 @@ add_compile_definitions(PATCH_VERSION=${PATCH_VAR})
 add_compile_definitions(REVISION_VERSION=${REVISION_VAR})
 add_compile_definitions(LW_INTERFACE_EXPORT)
 add_compile_definitions(NOMINMAX)
-add_compile_definitions(LW_ZHONGRILONG_PROJ)
+#add_compile_definitions(LW_ZHONGRILONG_PROJ)
 
 
 # 包含子项目。

@@ -15,7 +15,7 @@ void showMat_Thre(cv::Mat input, int Thre, int waitKey = 50) {
 	tempMat = input.clone();
 	tempMat.setTo(0, tempMat > Thre);
 	cv::normalize(tempMat, mappedMat, 0, 255, cv::NORM_MINMAX, CV_8U);
-	//tempMat.convertTo(mappedMat, CV_8UC1, 255.0 / 6000);
+	// tempMat.convertTo(mappedMat, CV_8UC1, 255.0 / 6000);
 
 	// 创建灰度图像
 	cv::Mat grayscaleImage(mappedMat.size(), CV_8U);
@@ -92,7 +92,7 @@ int main()
 
 	for (int i = 0; i < findCount; i++)
 	{
-		printf("设备编号: %d, 设备 SN: %s, 设备 Type: %s, 设备 IP: %s, 本机 IP: %s, 设备句柄: %llu\n",
+		printf("设备编号: %d, 设备 SN: %s, 设备 Type: %s, \n设备 IP: %s, 本机 IP: %s, \n设备句柄: %llu\n\n",
 			i,
 			deviceInfoList[i].sn, 
 			deviceInfoList[i].type, 
@@ -119,7 +119,16 @@ int main()
 		return 0;
 	}
 
-	LWSetDataReceiveType(handleList[index], LWDataRecvType::LW_DEPTH_RGB_RTY);
+	ret = LWSetDataReceiveType(handleList[index], LWDataRecvType::LW_DEPTH_RGB_RTY);
+	if (ret != LW_RETURN_OK)
+	{
+		printf("LWSetDataReceiveType function call failed: %s\n", LWGetReturnCodeDescriptor(ret));
+		system("pause");
+		return 0;
+	}
+
+	LWSetTransformRgbToDepthEnable(handleList[index], true);
+	//LWSetTransformDepthToRgbEnable(handleList[index], true);
 
 	//ret = LWUpdateFirmware(handleList[index], "C:\\Users\\12267\\Desktop\\DATA\\update_packets\\dm_updata_enc_V1.3.1.sh");
 	//if (ret != LW_RETURN_OK)
@@ -341,7 +350,7 @@ int main()
 */
 	// 数据读取
 	printf("\n\n");
-	std::this_thread::sleep_for(std::chrono::seconds(3));
+	std::this_thread::sleep_for(std::chrono::seconds(1));
 	LWFrameData frame;
 	int64_t t0 = 0;
 	int64_t t1 = 0;
@@ -356,7 +365,10 @@ int main()
 			continue;
 		}
 
-		ret = LWGetFrame(handleList[index], &frame, LW_RGB_FRAME);
+
+		//ret = LWGetFrame(handleList[index], &frame, LW_DEPTH_TO_RGB_FRAME);
+		//ret = LWGetFrame(handleList[index], &frame, LW_IR_TO_RGB_FRAME);
+		ret = LWGetFrame(handleList[index], &frame, LW_RGB_TO_DEPTH_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_DEPTH_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_IR_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_RGB_FRAME);
@@ -369,11 +381,17 @@ int main()
 			break;
 		}
 		
-		auto imageMat = cv::Mat(1200, 1600, CV_8UC3, frame.pFrameData);
+		auto imageMat = cv::Mat(480, 640, CV_8UC3, frame.pFrameData);
+		//auto imageMat = cv::Mat(frame.height, frame.width, CV_8UC1, frame.pFrameData);
+		//auto imageMat = cv::Mat(frame.height, frame.width, CV_16UC1, frame.pFrameData);
+		//cv::Mat dst;
+		//cv::normalize(imageMat, dst, 0, 255, cv::NORM_MINMAX, CV_8UC1);
 		cv::namedWindow("colorImageWindow", 0);
 		cv::resizeWindow("colorImageWindow", 800, 600);
 		cv::imshow("colorImageWindow", imageMat);
-		cv::waitKey(10);
+		cv::waitKey(1000);
+
+		//showMat_Thre(imageMat, 6000);
 
 		++conut;
 		if (t0 == frame.timestamp.tv_sec) continue;

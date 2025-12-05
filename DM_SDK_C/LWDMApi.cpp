@@ -2256,6 +2256,8 @@ void ljhNS::DeviceHandle::rgbToDepthThread(int threadID, int srcStartRow, int sr
 
 					int idxX = std::floor(float(x_ - xmin) / float(voxelSize));
 					int idxY = std::floor(float(y_ - ymin) / float(voxelSize));
+					
+					
 					// 20240727-根据数据精度设置低于均值+σ以下的数据才是RGB坐标系下的目标物，否则就是其投影区冗余数据
 					if (idxX >= 0 && idxY >= 0 && idxX < occupMap.cols && idxY < occupMap.rows)
 					{
@@ -2264,7 +2266,7 @@ void ljhNS::DeviceHandle::rgbToDepthThread(int threadID, int srcStartRow, int sr
 						{
 							int index = y_ * rgbWidth + x_;
 							*ptrR2D = ptrRGB[index];
-
+							
 							continue;
 						}
 					}
@@ -3367,7 +3369,7 @@ LWReturnCode ljhNS::DeviceHandle::GetExtrinsicParam(LWSensorType sensorType, LWS
 	auto RC = ExecuteCommand(command);
     if (RC == LW_RETURN_OK)
     {
-        auto ptr1 = (double*)command.getArgField();
+        auto ptr1 = (double*)commandRecvFrame.getArgField();
         auto ptr2 = (float*)&extrinsicParam;
         for (int i = 0; i < 12; i++)
         {
@@ -6960,7 +6962,9 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 			ljhNS::gGlobal.numDeviceMap[handle]->r2dRunCount = THREAD_POOL_SIZE;
 			ljhNS::gGlobal.numDeviceMap[handle]->r2dFlag = 0xFFFFFFFF;
 			ljhNS::gGlobal.numDeviceMap[handle]->r2dNotify.notify_all();
-			if (!ljhNS::gGlobal.numDeviceMap[handle]->r2dNotify.wait_for(lock, std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle]->timeout }, [handle] { return (ljhNS::gGlobal.numDeviceMap[handle]->r2dRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
+			if (!ljhNS::gGlobal.numDeviceMap[handle]->r2dNotify.wait_for(lock, 
+				std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle]->timeout }, 
+				[handle] { return (ljhNS::gGlobal.numDeviceMap[handle]->r2dRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
 			{
 				return LW_RETURN_TIMEOUT;
 			}
@@ -7016,7 +7020,10 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 			ljhNS::gGlobal.numDeviceMap[handle]->d2rRunCount = THREAD_POOL_SIZE;
 			ljhNS::gGlobal.numDeviceMap[handle]->d2rFlag = 0xFFFFFFFF;
 			ljhNS::gGlobal.numDeviceMap[handle]->d2rNotify.notify_all();
-			if(!ljhNS::gGlobal.numDeviceMap[handle]->d2rNotify.wait_for(lock, std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle]->timeout }, [handle] { return (ljhNS::gGlobal.numDeviceMap[handle]->d2rRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
+			if(!ljhNS::gGlobal.numDeviceMap[handle]->d2rNotify.wait_for(
+				lock, 
+				std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle]->timeout }, 
+				[handle] { return (ljhNS::gGlobal.numDeviceMap[handle]->d2rRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
 			{
 				return LW_RETURN_TIMEOUT;
 			}
