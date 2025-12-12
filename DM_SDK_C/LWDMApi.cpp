@@ -1346,6 +1346,7 @@ namespace ljhNS
 		LWReturnCode GetFrameRate(int32_t& value);
 		LWReturnCode SetExposureTime(LWSensorType sensorType, const int32_t* exposureTimeArray, int32_t arraySize);
 		LWReturnCode GetExposureTime(LWSensorType sensorType, int32_t* exposureTimeArray, int32_t arraySize, int32_t& filledCount);
+		LWReturnCode SetResolution(LWSensorType sensorType, int32_t width, int32_t height);
 		LWReturnCode GetResolution(LWSensorType type, int32_t& width, int32_t& height);
 		LWReturnCode GetIntrinsicParam(LWSensorType sensorType, LWSensorIntrinsicParam& intrinsicParam);
 		LWReturnCode GetExtrinsicParam(LWSensorType sensorType, LWSensorExtrinsicParam& extrinsicParam);
@@ -1419,7 +1420,7 @@ namespace ljhNS
 		LWReturnCode SendOperateCommand(const char* comstr, int size);
 		LWReturnCode SetDRNU(bool enable);
 		LWReturnCode SetBinningMode(LWBinningMode mode);
-		LWReturnCode SetResolution(LWSensorType sensorType, int32_t width, int32_t height);
+		//LWReturnCode SetResolution(LWSensorType sensorType, int32_t width, int32_t height);
 		LWReturnCode SetDistortionCalibration(LWSensorType sensorType, bool enable);
 		LWReturnCode SetLaserWorkFrequency(const uint8_t* arr, int size);
 		LWReturnCode SetAutoExposureDefaultValue(uint16_t val);
@@ -1999,6 +2000,7 @@ void ljhNS::DeviceHandle::rgbDataHandleThread()
 			);
 			// 畸变校准
 			if (rgbDistortionEnable) cv::remap(img, img, rgbCalibMap1, rgbCalibMap2, cv::INTER_LINEAR);
+			//if (rgbDistortionEnable) cv::remap(img, dst, rgbCalibMap1, rgbCalibMap2, cv::INTER_NEAREST);
 		}
 		else if (rgbSrcNode->rgbTFormat == LWRgbTransferFormat::LW_BGR_565)
 		{
@@ -2014,7 +2016,7 @@ void ljhNS::DeviceHandle::rgbDataHandleThread()
 			{
 				cv::remap(
 					cv::Mat(rgbHeight, rgbWidth, CV_8UC3, rgbSrcNode->data()),
-					img, 
+					img,
 					rgbCalibMap1, 
 					rgbCalibMap2, 
 					cv::INTER_NEAREST
@@ -3235,6 +3237,55 @@ LWReturnCode ljhNS::DeviceHandle::GetExposureTime(LWSensorType sensorType, int32
 		}
 
 		filledCount = len;
+	}
+
+	return RC;
+}
+
+LWReturnCode ljhNS::DeviceHandle::SetResolution(LWSensorType sensorType, int32_t width, int32_t height)
+{
+	std::lock_guard<std::mutex> guard{ nrMutex };
+
+	LOG_INFO_OUT("<%s>, SensorType: %u, Width: %d, Height: %d", _SN_.c_str(), sensorType, width, height);
+
+	if (!openEnable.load()) return LW_RETURN_UNOPENED;
+
+	uint8_t var = 0x00;
+	CommandSFrame command;
+
+	if (sensorType == LWSensorType::LW_RGB_SENSOR)
+	{
+		command.setCommand(C_SetRgbCameraResolutionRatio);
+
+		if (width == 1600 && height == 1200) var = 0x00;
+		else if (width == 800 && height == 600) var = 0x01;
+		else if (width == 640 && height == 480) var = 0x02;
+		else return LW_RETURN_ARG_OUT_OF_RANGE;
+
+		command.setArgField(&var, 1);
+	}
+	else if (sensorType == LWSensorType::LW_TOF_SENSOR)
+	{
+		command.setCommand(C_SetBinning);
+
+		if (width == 640 && height == 480) var = 0x00;
+		else if (width == 320 && height == 240) var = 0x01;
+		else if (width == 160 && height == 120) var = 0x02;
+		else return LW_RETURN_ARG_OUT_OF_RANGE;
+
+		command.setArgField(&var, 1);
+	}
+	else
+	{
+		return LW_RETURN_TYPE_NOT_EXIST;
+	}
+	
+	auto RC = ExecuteCommand(command);
+	if (RC == LW_RETURN_OK)
+	{
+		rgbWidth = width;
+		rgbHeight = height;
+		rgbPixels = rgbWidth * rgbHeight;
 	}
 
 	return RC;
@@ -4962,35 +5013,35 @@ LWReturnCode ljhNS::DeviceHandle::SetBinningMode(LWBinningMode mode)
 	return ExecuteCommand(command);
 }
 
-LWReturnCode ljhNS::DeviceHandle::SetResolution(LWSensorType sensorType, int32_t width, int32_t height)
-{
-	std::lock_guard<std::mutex> guard{ nrMutex };
-
-	LOG_INFO_OUT("<%s>, SensorType: %u, Width: %d, Height: %d", _SN_.c_str(), sensorType, width, height);
-
-	if (!openEnable.load()) return LW_RETURN_UNOPENED;
-	return LW_RETURN_NOT_SUPPORTED;
-
-	uint8_t var = 0xff;
-	if (width == 1600 && height == 1200) var = 0x00;
-	if (width == 800 && height == 600) var = 0x01;
-	if (width == 640 && height == 480) var = 0x02;
-	if (var == 0xff) return LW_RETURN_ARG_OUT_OF_RANGE;
-
-	CommandSFrame command;
-
-	if (sensorType == LWSensorType::LW_RGB_SENSOR)
-	{
-		command .setCommand(C_SetRgbCameraResolutionRatio);
-	}
-	else
-	{
-		return LW_RETURN_NOT_SUPPORTED;
-	}
-
-	command.setArgField(&var, 1);
-	return ExecuteCommand(command);
-}
+//LWReturnCode ljhNS::DeviceHandle::SetResolution(LWSensorType sensorType, int32_t width, int32_t height)
+//{
+//	std::lock_guard<std::mutex> guard{ nrMutex };
+//
+//	LOG_INFO_OUT("<%s>, SensorType: %u, Width: %d, Height: %d", _SN_.c_str(), sensorType, width, height);
+//
+//	if (!openEnable.load()) return LW_RETURN_UNOPENED;
+//	return LW_RETURN_NOT_SUPPORTED;
+//
+//	uint8_t var = 0xff;
+//	if (width == 1600 && height == 1200) var = 0x00;
+//	if (width == 800 && height == 600) var = 0x01;
+//	if (width == 640 && height == 480) var = 0x02;
+//	if (var == 0xff) return LW_RETURN_ARG_OUT_OF_RANGE;
+//
+//	CommandSFrame command;
+//
+//	if (sensorType == LWSensorType::LW_RGB_SENSOR)
+//	{
+//		command .setCommand(C_SetRgbCameraResolutionRatio);
+//	}
+//	else
+//	{
+//		return LW_RETURN_NOT_SUPPORTED;
+//	}
+//
+//	command.setArgField(&var, 1);
+//	return ExecuteCommand(command);
+//}
 
 LWReturnCode ljhNS::DeviceHandle::SetDistortionCalibration(LWSensorType sensorType, bool enable)
 {
@@ -6473,6 +6524,15 @@ LWReturnCode LWGetHardTriggerFilterParams(LWDeviceHandle handle, int32_t* t1, in
 	return ljhNS::gGlobal.numDeviceMap[handle]->GetHardTriggerFilterParams(*t1, *t2);
 }
 
+LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height)
+{
+	if (!ljhNS::gGlobal.initEnable.load()) return LW_RETURN_UNINITIALIZED;
+	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
+		return LW_RETURN_HANDLE_MISMATCH;
+
+	return ljhNS::gGlobal.numDeviceMap[handle]->SetResolution(sensorType, width, height);
+}
+
 LWReturnCode LWGetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t* width, int32_t* height)
 {
 	if (!ljhNS::gGlobal.initEnable.load()) return LW_RETURN_UNINITIALIZED;
@@ -7777,14 +7837,14 @@ LWReturnCode LWSetBinningMode(LWDeviceHandle handle, LWBinningMode mode)
 	return ljhNS::gGlobal.numDeviceMap[handle]->SetBinningMode(mode);
 }
 
-LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height)
-{
-	if (!ljhNS::gGlobal.initEnable.load()) return LW_RETURN_UNINITIALIZED;
-	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
-		return LW_RETURN_HANDLE_MISMATCH;
-
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetResolution(sensorType, width, height);
-}
+//LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height)
+//{
+//	if (!ljhNS::gGlobal.initEnable.load()) return LW_RETURN_UNINITIALIZED;
+//	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
+//		return LW_RETURN_HANDLE_MISMATCH;
+//
+//	return ljhNS::gGlobal.numDeviceMap[handle]->SetResolution(sensorType, width, height);
+//}
 
 LWReturnCode LWSetDistortionCalibration(LWDeviceHandle handle, LWSensorType sensorType, bool enable)
 {

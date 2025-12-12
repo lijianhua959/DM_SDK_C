@@ -127,7 +127,9 @@ int main()
 		return 0;
 	}
 
-	LWSetTransformRgbToDepthEnable(handleList[index], true);
+	LWSetResolution(handleList[index], LWSensorType::LW_RGB_SENSOR, 640, 480);
+
+	//LWSetTransformRgbToDepthEnable(handleList[index], true);
 	//LWSetTransformDepthToRgbEnable(handleList[index], true);
 
 	//ret = LWUpdateFirmware(handleList[index], "C:\\Users\\12267\\Desktop\\DATA\\update_packets\\dm_updata_enc_V1.3.1.sh");
@@ -368,10 +370,10 @@ int main()
 
 		//ret = LWGetFrame(handleList[index], &frame, LW_DEPTH_TO_RGB_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LW_IR_TO_RGB_FRAME);
-		ret = LWGetFrame(handleList[index], &frame, LW_RGB_TO_DEPTH_FRAME);
+		//ret = LWGetFrame(handleList[index], &frame, LW_RGB_TO_DEPTH_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_DEPTH_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_IR_FRAME);
-		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_RGB_FRAME);
+		ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_RGB_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_POINTCLOUD_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_D2R_POINTCLOUD_FRAME);
 		//ret = LWGetFrame(handleList[index], &frame, LWFrameType::LW_POINTCLOUD_FRAME);
@@ -381,13 +383,14 @@ int main()
 			break;
 		}
 		
-		auto imageMat = cv::Mat(480, 640, CV_8UC3, frame.pFrameData);
+		printf("size: %d, %d\n", frame.height, frame.width);
+		auto imageMat = cv::Mat(frame.height, frame.width, CV_8UC3, frame.pFrameData);
 		//auto imageMat = cv::Mat(frame.height, frame.width, CV_8UC1, frame.pFrameData);
 		//auto imageMat = cv::Mat(frame.height, frame.width, CV_16UC1, frame.pFrameData);
 		//cv::Mat dst;
 		//cv::normalize(imageMat, dst, 0, 255, cv::NORM_MINMAX, CV_8UC1);
 		cv::namedWindow("colorImageWindow", 0);
-		cv::resizeWindow("colorImageWindow", 800, 600);
+		//cv::resizeWindow("colorImageWindow", 800, 600);
 		cv::imshow("colorImageWindow", imageMat);
 		cv::waitKey(1000);
 

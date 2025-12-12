@@ -420,6 +420,15 @@ LW_C_API LWReturnCode LWSetHardTriggerFilterParams(LWDeviceHandle handle, int32_
 /// @return 返回码。
 LW_C_API LWReturnCode LWGetHardTriggerFilterParams(LWDeviceHandle handle, int32_t* t1, int32_t* t2);
 
+/// @brief 设置传感器的分辨率。
+/// @note 目前仅支持TOF传感器的可设置组合为：640*480、320*240、160*120；支持RGB传感器的可设置组合为：1600*1200、800*600、640*480。
+/// @param[in] handle 设备描述符。
+/// @param[in] sensorType 传感器类型。
+/// @param[in] width 图像宽度即水平分辨率。
+/// @param[in] height 图像高度即垂直分辨率。
+/// @return 返回码。
+LW_C_API LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height);
+
 /// @brief 获取传感器的分辨率。
 /// @param[in] handle 设备描述符。
 /// @param[in] sensorType 传感器类型（TOF/RGB）。
@@ -726,14 +735,14 @@ LW_C_API LWReturnCode LWSetDRNU(LWDeviceHandle handle, bool enable);
 /// @return 返回码。
 LW_C_API LWReturnCode LWSetBinningMode(LWDeviceHandle handle, LWBinningMode mode);
 
-/// @brief 设置传感器的分辨率。
-/// @note 目前仅支持TOF传感器，可设置组合为：320*240、640*480。
-/// @param[in] handle 设备描述符。
-/// @param[in] sensorType 传感器类型。
-/// @param[in] width 图像宽度即水平分辨率。
-/// @param[in] height 图像高度即垂直分辨率。
-/// @return 返回码。
-LW_C_API LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height);
+///// @brief 设置传感器的分辨率。
+///// @note 目前仅支持TOF传感器，可设置组合为：320*240、640*480。
+///// @param[in] handle 设备描述符。
+///// @param[in] sensorType 传感器类型。
+///// @param[in] width 图像宽度即水平分辨率。
+///// @param[in] height 图像高度即垂直分辨率。
+///// @return 返回码。
+//LW_C_API LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height);
 
 /// @brief 设置畸变校准使能开关。
 /// @param[in] handle 设备描述符。
