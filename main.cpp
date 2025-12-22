@@ -102,6 +102,14 @@ int main()
 		);
 
 		handleList[i] = deviceInfoList[i].handle;
+
+		//ret = LWOpenDevice(handleList[i]);
+		//if (ret != LW_RETURN_OK)
+		//{
+		//	printf("LWOpenDevice function call failed: %s\n", LWGetReturnCodeDescriptor(ret));
+		//	system("pause");
+		//	return 0;
+		//}
 	}
 
 	if (findCount > 1)

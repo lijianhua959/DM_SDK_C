@@ -586,6 +586,13 @@ namespace ljhNS
 	void(*frameReadyCallback)(LWDeviceHandle handle, void* pUserData) = nullptr;
 	void* pUserData2 = nullptr;
 
+	// 特定于设备的网络异常检测回调函数。
+	std::map<LWDeviceHandle, void(*)(const char* error, void* pUserData) > _networkAbnormalCallback;
+	std::map<LWDeviceHandle, void*> _pUserData1;
+
+	// 特定于设备的帧数据刷新回调函数。
+	std::map<LWDeviceHandle, void(*)(void* pUserData) > _frameReadyCallback;
+	std::map<LWDeviceHandle, void*> _pUserData2;
 
 	/// ******************************************* 内部数据结构类型 *******************************************
 
@@ -1731,7 +1738,9 @@ void ljhNS::DeviceHandle::commandRecvThread()
 			connectEnable.store(false);
 			auto einfo = getNetworkLastError();
 
-			if (networkAbnormalCallback != nullptr)
+			if ((_networkAbnormalCallback.find(handle) != _networkAbnormalCallback.end()) && (_networkAbnormalCallback[handle] != nullptr))
+				_networkAbnormalCallback[handle](einfo.c_str(), _pUserData1[handle]);
+			else if (networkAbnormalCallback != nullptr)
 				networkAbnormalCallback(handle, einfo.c_str(), pUserData1);
 
 			LOG_ERROR_OUT("<%s>, The network connection has been disconnected.---%s", _SN_.c_str(), einfo.c_str());
@@ -1931,7 +1940,9 @@ void ljhNS::DeviceHandle::rawDataRecvThread()
 			connectEnable.store(false);
 			auto einfo = getNetworkLastError();
 
-			if (networkAbnormalCallback != nullptr)
+			if ((_networkAbnormalCallback.find(handle) != _networkAbnormalCallback.end()) && (_networkAbnormalCallback[handle] != nullptr))
+				_networkAbnormalCallback[handle](einfo.c_str(), _pUserData1[handle]);
+			else if (networkAbnormalCallback != nullptr)
 				networkAbnormalCallback(handle, einfo.c_str(), pUserData1);
 
 			LOG_ERROR_OUT("<%s>, The network connection has been disconnected.---%s", _SN_.c_str(), einfo.c_str());
@@ -2089,7 +2100,10 @@ void ljhNS::DeviceHandle::dataSyncThread()
 				syncDataMutex.unlock();
 				syncDataNotify.notify_one();
 
-				if (frameReadyCallback != nullptr) frameReadyCallback(handle, pUserData2);
+				if ((_frameReadyCallback.find(handle)!= _frameReadyCallback.end()) && (_frameReadyCallback[handle] != nullptr))
+					_frameReadyCallback[handle](_pUserData2[handle]);
+				else if (frameReadyCallback != nullptr) 
+					frameReadyCallback(handle, pUserData2);
 
 				continue;
 			}
@@ -2129,7 +2143,10 @@ void ljhNS::DeviceHandle::dataSyncThread()
 			syncDataMutex.unlock();
 			syncDataNotify.notify_one();
 
-			if (frameReadyCallback != nullptr) frameReadyCallback(handle, pUserData2);
+			if ((_frameReadyCallback.find(handle) != _frameReadyCallback.end()) && (_frameReadyCallback[handle] != nullptr))
+				_frameReadyCallback[handle](_pUserData2[handle]);
+			else if (frameReadyCallback != nullptr) 
+				frameReadyCallback(handle, pUserData2);
 
 			continue;
 		}
@@ -5691,6 +5708,8 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 	}
 
 	// 清空设备列表
+	uint64_t magic = 0;
+	std::unordered_set<uint64_t> flagSet;
 	ljhNS::gGlobal.numDeviceMap.clear();
 	*findCount = 0;
 
@@ -5708,7 +5727,7 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 	std::vector<std::thread> thread_list;
 	for (const auto& local_addr : sockaddr_list)
 	{
-		thread_list.emplace_back([&local_addr, &_mutex, &deviceInfoList, &listCount, &findCount]()->void {
+		thread_list.emplace_back([&local_addr, &_mutex, &magic, &flagSet, &deviceInfoList, &listCount, &findCount]()->void {
 			// 广播地址
 			sockaddr_in to_addr{};
 			to_addr.sin_family = AF_INET;
@@ -5748,18 +5767,13 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 						uint32_t devMrak = ntohl(*((uint32_t*)(reply + 13)));
 
 						// 获取设备序列号
-						std::string sn(command.getArgField() + 17, 13);
-						if (sn.find("DM") == std::string::npos) continue;
+						if (command.getArgFieldLength() < 31) continue;
+						std::string sn{ command.getArgField() + 17, 13 };
 
-						// 生成设备唯一标识ID
-						LWDeviceHandle id = 0;
-						auto idPtr = (char*)&id;
-						memcpy(idPtr, &devIP, 4);
-						memcpy(idPtr + 4, &locIP, 4);
-
-						// 获取设备类型
+						// 获取设备类型(不可靠)
 						std::string devType;
 						auto t_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+						if (t_socket == INVALID_SOCKET) LOG_INFO_OUT("create socket: %s", ljhNS::getNetworkLastError().c_str());
 						ljhNS::setNetworkTimeout(t_socket, 1500);
 						ljhNS::CommandSFrame t_command{ C_GetDeviceType };
 						if (sendto(t_socket, t_command.data(), t_command.size(), MSG_NOSIGNAL, (sockaddr*)&from_addr, sizeof(from_addr)) != SOCKET_ERROR)
@@ -5774,32 +5788,58 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 						}
 						ljhNS::closeSocket(t_socket);
 
-						// 根据序列号创建设备对象并保存到全局列表中
-						_mutex.lock();
-						if (ljhNS::gGlobal.strDeviceMap.find(sn) == ljhNS::gGlobal.strDeviceMap.end())
+						// 数据同步
+						std::lock_guard<std::mutex> guard{ _mutex };
+
+						// 
+						if (ljhNS::gGlobal.strDeviceMap.find(sn) != ljhNS::gGlobal.strDeviceMap.end()) continue;
+
+						// 生成设备唯一标识ID（设备句柄）
+						LWDeviceHandle id = 0;
+						auto idPtr = (char*)&id;
+						memcpy(idPtr, &devIP, 4);
+						memcpy(idPtr + 4, &locIP, 4);
+
+						// 判定设备句柄是否有重复, 以标注冲突IP
+						if (ljhNS::gGlobal.numDeviceMap.find(id) != ljhNS::gGlobal.numDeviceMap.end())
 						{
-							ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(id);
+							flagSet.insert(id);
+
+							id = magic;
+							devType = "unknown";
+							++magic;
 						}
-						ljhNS::gGlobal.numDeviceMap[id] = ljhNS::gGlobal.strDeviceMap[sn];
-						
-						// 填充设备列表信息
+
+						// 填充设备信息列表
 						if (*findCount < listCount)
 						{
 							deviceInfoList[*findCount].handle = id;
-							memcpy(deviceInfoList[*findCount].sn, sn.c_str(), 13);
-							deviceInfoList[*findCount].sn[13] = '\0';
+
+							memset(deviceInfoList[*findCount].sn, 0, 32);
+							memset(deviceInfoList[*findCount].type, 0, 32);
+
+							memcpy_s(deviceInfoList[*findCount].sn, 32, sn.c_str(), sn.size());
+							memcpy_s(deviceInfoList[*findCount].type, 32, devType.c_str(), devType.size());
 							inet_ntop(AF_INET, &devIP, deviceInfoList[*findCount].ip, 32);
 							inet_ntop(AF_INET, &locIP, deviceInfoList[*findCount].local_ip, 32);
 
-							auto len = devType.size();
-							if (len > 0)
-							{
-								memcpy(deviceInfoList[*findCount].type, devType.c_str(), len);
-								deviceInfoList[*findCount].type[len] = '\0';
-							}
 						}
 						++(*findCount);
-						_mutex.unlock();
+
+						// 设备判定
+						if (sn.find("DM") == std::string::npos)
+						{
+							ljhNS::gGlobal.numDeviceMap[id] = nullptr;
+							continue;
+						}
+
+						// 根据序列号创建设备对象并保存到全局列表中
+						//if (gGlobal.strDeviceMap.find(sn) == gGlobal.strDeviceMap.end())
+						//{
+						//	gGlobal.strDeviceMap[sn] = new DeviceHandle(id);
+						//}
+						ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(id);
+						ljhNS::gGlobal.numDeviceMap[id] = ljhNS::gGlobal.strDeviceMap[sn];
 
 						// 填充设备信息
 						auto handle = ljhNS::gGlobal.numDeviceMap[id];
@@ -5847,10 +5887,28 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 		var.join();
 	}
 
+	for (auto var : flagSet)
+	{
+		ljhNS::gGlobal.numDeviceMap[magic] = nullptr;
+		ljhNS::gGlobal.numDeviceMap.erase(var);
+
+		for (size_t i = 0; i < (*findCount); i++)
+		{
+			if (deviceInfoList[i].handle == var)
+			{
+				deviceInfoList[i].handle = magic;
+				memset(deviceInfoList[i].type, 0, 32);
+				memcpy(deviceInfoList[i].type, "unknown", 7);
+			}
+		}
+
+		++magic;
+	}
+
 	return LW_RETURN_OK;
 }
 
-LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_t *filledCount)
+LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_t * findCount)
 {
 	std::lock_guard<std::mutex> guard{ notReentryMutex };
 
@@ -5864,8 +5922,11 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 		return LW_RETURN_CUSTOM_ERROR;
 	}
 
+	// 清空设备列表
+	uint64_t magic = 0;
+	std::unordered_set<uint64_t> flagSet;
 	ljhNS::gGlobal.numDeviceMap.clear();
-    *filledCount = 0;
+    *findCount = 0;
 
     std::vector<sockaddr_in> sockaddr_list;
 	if (!ljhNS::getLocalAddrInfo(sockaddr_list))
@@ -5879,7 +5940,7 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
     std::vector<std::thread> thread_list;
     for (const auto& local_addr : sockaddr_list)
     {
-        thread_list.emplace_back([&local_addr, &_mutex, &handleList, &listCount, &filledCount]()->void {
+        thread_list.emplace_back([&local_addr, &_mutex, &magic, &flagSet, &handleList, &listCount, &findCount]()->void {
 			// 广播地址
             sockaddr_in to_addr{};
             to_addr.sin_family = AF_INET;
@@ -5918,17 +5979,14 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 						uint32_t locIP = local_addr.sin_addr.s_addr;
                         uint32_t devMrak = ntohl(*((uint32_t*)(reply + 13)));
 
-						std::string sn(command.getArgField() + 17, 13);
-						if (sn.find("DM") == std::string::npos) continue;
+						// 获取设备序列号
+						if (command.getArgFieldLength() < 31) continue;
+						std::string sn{ command.getArgField() + 17, 13 };
 
-						LWDeviceHandle id = 0;
-						auto idPtr = (char*)&id;
-						memcpy(idPtr, &devIP, 4);
-						memcpy(idPtr + 4, &locIP, 4);
-
-						// 获取设备类型
+						// 获取设备类型(不可靠)
 						std::string devType;
 						auto t_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+						if (t_socket == INVALID_SOCKET) LOG_INFO_OUT("create socket: %s", ljhNS::getNetworkLastError().c_str());
 						ljhNS::setNetworkTimeout(t_socket, 1500);
 						ljhNS::CommandSFrame t_command{ C_GetDeviceType };
 						if (sendto(t_socket, t_command.data(), t_command.size(), MSG_NOSIGNAL, (sockaddr*)&from_addr, sizeof(from_addr)) != SOCKET_ERROR)
@@ -5943,19 +6001,50 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 						}
 						ljhNS::closeSocket(t_socket);
 
-						_mutex.lock();
-						if (ljhNS::gGlobal.strDeviceMap.find(sn) == ljhNS::gGlobal.strDeviceMap.end())
+						// 数据同步
+						std::lock_guard<std::mutex> guard{ _mutex };
+
+						// 
+						if (ljhNS::gGlobal.strDeviceMap.find(sn) != ljhNS::gGlobal.strDeviceMap.end()) continue;
+
+						// 生成设备唯一标识ID（设备句柄）
+						LWDeviceHandle id = 0;
+						auto idPtr = (char*)&id;
+						memcpy(idPtr, &devIP, 4);
+						memcpy(idPtr + 4, &locIP, 4);
+
+						// 判定设备句柄是否有重复, 以标注冲突IP
+						if (ljhNS::gGlobal.numDeviceMap.find(id) != ljhNS::gGlobal.numDeviceMap.end())
 						{
-							ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(id);
+							flagSet.insert(id);
+
+							id = magic;
+							devType = "unknown";
+							++magic;
 						}
+
+						// 填充设备信息列表
+						if (*findCount < listCount)
+						{
+							handleList[*findCount] = id;
+						}
+						++(*findCount);
+
+						// 设备判定
+						if (sn.find("DM") == std::string::npos)
+						{
+							ljhNS::gGlobal.numDeviceMap[id] = nullptr;
+							continue;
+						}
+
+						// 根据序列号创建设备对象并保存到全局列表中
+						//if (gGlobal.strDeviceMap.find(sn) == gGlobal.strDeviceMap.end())
+						//{
+						//	gGlobal.strDeviceMap[sn] = new DeviceHandle(id);
+						//}
+						ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(id);
 						ljhNS::gGlobal.numDeviceMap[id] = ljhNS::gGlobal.strDeviceMap[sn];
-						if (*filledCount < listCount)
-						{
-							handleList[*filledCount] = id;
-							++(*filledCount);
-						}
-						_mutex.unlock();
-						
+				
 						auto handle = ljhNS::gGlobal.numDeviceMap[id];
 						handle->_SN_ = sn;
 						handle->deviceType = devType;
@@ -6000,6 +6089,22 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
         var.join();
     }
 
+	for (auto var : flagSet)
+	{
+		ljhNS::gGlobal.numDeviceMap[magic] = nullptr;
+		ljhNS::gGlobal.numDeviceMap.erase(var);
+
+		for (size_t i = 0; i < (*findCount); i++)
+		{
+			if (handleList[i] == var)
+			{
+				handleList[i] = magic;
+			}
+		}
+
+		++magic;
+	}
+
     return LW_RETURN_OK;
 }
 
@@ -6010,6 +6115,9 @@ LWReturnCode LWOpenDevice(LWDeviceHandle handle)
 	if (!ljhNS::gGlobal.initEnable.load()) return LW_RETURN_UNINITIALIZED;
     if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
         return LW_RETURN_HANDLE_MISMATCH;
+
+	if (handle < 255) return LW_RETURN_DEVICE_IP_CONFLICT;
+	if (ljhNS::gGlobal.numDeviceMap[handle] == nullptr) return LW_RETURN_DEVICE_INVALID;
 
     return ljhNS::gGlobal.numDeviceMap[handle]->OpenDevice();
 }
@@ -6651,6 +6759,20 @@ LWReturnCode LWRegisterNetworkMonitoringCallback(void(*pCallback)(LWDeviceHandle
 	return LW_RETURN_OK;
 }
 
+LWReturnCode LWRegisterNetworkMonitoringCallback1(LWDeviceHandle handle, void(*pCallback)(const char* error, void* pUserData), void* pUserData)
+{
+	std::lock_guard<std::mutex> guard{ notReentryMutex };
+
+	LOG_INFO_OUT("");
+
+	if (!ljhNS::gGlobal.initEnable.load()) return LW_RETURN_UNINITIALIZED;
+
+	ljhNS::_pUserData1[handle] = pUserData;
+	ljhNS::_networkAbnormalCallback[handle] = pCallback;
+
+	return LW_RETURN_OK;
+}
+
 LWReturnCode LWRegisterFrameReadyCallback(void(*pCallback)(LWDeviceHandle handle, void* pUserData), void* pUserData)
 {
 	std::lock_guard<std::mutex> guard{ notReentryMutex };
@@ -6661,6 +6783,20 @@ LWReturnCode LWRegisterFrameReadyCallback(void(*pCallback)(LWDeviceHandle handle
 
 	ljhNS::pUserData2 = pUserData;
 	ljhNS::frameReadyCallback = pCallback;
+
+	return LW_RETURN_OK;
+}
+
+LWReturnCode LWRegisterFrameReadyCallback1(LWDeviceHandle handle, void(*pCallback)(void* pUserData), void* pUserData)
+{
+	std::lock_guard<std::mutex> guard{ notReentryMutex };
+
+	LOG_INFO_OUT("");
+
+	if (!ljhNS::gGlobal.initEnable.load()) return LW_RETURN_UNINITIALIZED;
+
+	ljhNS::_pUserData2[handle] = pUserData;
+	ljhNS::_frameReadyCallback[handle] = pCallback;
 
 	return LW_RETURN_OK;
 }
@@ -6725,6 +6861,14 @@ const char *LWGetReturnCodeDescriptor(LWReturnCode code)
 
 	case LW_RETURN_INDEX_NOT_EXIST:
 		ljhNS::gGlobal.errorInfo = "The index value does not exist, please pass in the correct index value.";
+		break;
+
+	case LW_RETURN_DEVICE_INVALID:
+		ljhNS::gGlobal.errorInfo = "The library does not support operations on this device.";
+		break;
+
+	case LW_RETURN_DEVICE_IP_CONFLICT:
+		ljhNS::gGlobal.errorInfo = "Detected that the connected devices have the same IP, resulting in inability to access devices with IP conflicts. Each device's IP must be set to be unique.";
 		break;
 
 	case LW_RETURN_THREAD_QUIT_TIMEOUT:

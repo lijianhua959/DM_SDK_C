@@ -502,16 +502,32 @@ LW_C_API LWReturnCode LWGetLibVersion(LWVersionInfo* version);
 LW_C_API LWReturnCode LWGetDeviceVersion(LWDeviceHandle handle, LWVersionInfo* fv, LWVersionInfo* dv);
 
 /// @brief 注册网络异常检测的回调函数。当出现SDK与设备的网络连接异常时，该回调函数会被立即调用。
+/// @note 如果设备已用LWRegisterNetworkMonitoringCallback1函数注册了回调函数，则该全局回调函数将失去效果。
 /// @param[in] pCallback 回调函数。当指针为空时即：nullptr，则将移除已注册的回调函数。
 /// @param[in] pUserData 用户数据。
 /// @return 返回码。
 LW_C_API LWReturnCode LWRegisterNetworkMonitoringCallback(void(*pCallback)(LWDeviceHandle handle, const char* error, void* pUserData), void* pUserData);
 
-/// @brief 注册探测新数据可用的回调函数。每当有新数据可用时，该回调函数会被立即调用。
+/// @brief 向特定设备注册网络异常检测的回调函数。当出现SDK与设备的网络连接异常时，该回调函数会被立即调用。
+/// @note 优先级大于全局回调函数（即用LWRegisterNetworkMonitoringCallback函数注册的回调函数）。
+/// @param[in] pCallback 回调函数。当指针为空时即：nullptr，则将移除已注册的回调函数。
+/// @param[in] pUserData 用户数据。
+/// @return 返回码。
+LW_C_API LWReturnCode LWRegisterNetworkMonitoringCallback1(LWDeviceHandle handle, void(*pCallback)(const char* error, void* pUserData), void* pUserData);
+
+/// @brief 注册探测新数据可用的全局回调函数（作用于所有设备）。每当有新数据可用时，该回调函数会被立即调用。
+/// @note 如果设备已用LWRegisterFrameReadyCallback1函数注册了回调函数，则该全局回调函数将失去效果。
 /// @param[in] pCallback 回调函数。当指针为空时即：nullptr，则将移除已注册的回调函数。
 /// @param[in] pUserData 用户数据。
 /// @return 返回码。
 LW_C_API LWReturnCode LWRegisterFrameReadyCallback(void(*pCallback)(LWDeviceHandle handle, void* pUserData), void* pUserData);
+
+/// @brief 向特定设备注册探测新数据可用的回调函数。每当有新数据可用时，该回调函数会被立即调用。
+/// @note 优先级大于全局回调函数（即用LWRegisterFrameReadyCallback函数注册的回调函数）。
+/// @param[in] pCallback 回调函数。当指针为空时即：nullptr，则将移除已注册的回调函数。
+/// @param[in] pUserData 用户数据。
+/// @return 返回码。
+LW_C_API LWReturnCode LWRegisterFrameReadyCallback1(LWDeviceHandle handle, void(*pCallback)(void* pUserData), void* pUserData);
 
 /// @brief 获取返回码对应的描述信息。
 /// @param[in] code 返回码。

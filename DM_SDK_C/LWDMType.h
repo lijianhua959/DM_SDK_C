@@ -119,6 +119,8 @@ typedef enum : uint32_t
 
     LW_RETURN_FIRMWARE_UPDATE_FAIL  = 0x30, ///< 设备固件更新失败。
     LW_RETURN_INDEX_NOT_EXIST       = 0x31, ///< 不存在该索引值，请传入正确的索引值。
+    LW_RETURN_DEVICE_INVALID        = 0x32, ///< 库不支持对该设备的操作。
+    LW_RETURN_DEVICE_IP_CONFLICT    = 0x33, ///< 检测到接入的设备有相同的IP，导致无法访问有IP冲突的设备，须将每个设备的IP设置成唯一的。
 
     LW_RETURN_CUSTOM_ERROR          = 0xfa, ///< 自定义错误，欲知详情请调用“LWGetReturnCodeDescriptor”函数。
 
