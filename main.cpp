@@ -135,18 +135,18 @@ int main()
 		return 0;
 	}
 
-	LWSetResolution(handleList[index], LWSensorType::LW_RGB_SENSOR, 640, 480);
+	//LWSetResolution(handleList[index], LWSensorType::LW_RGB_SENSOR, 640, 480);
 
 	//LWSetTransformRgbToDepthEnable(handleList[index], true);
 	//LWSetTransformDepthToRgbEnable(handleList[index], true);
 
-	//ret = LWUpdateFirmware(handleList[index], "C:\\Users\\12267\\Desktop\\DATA\\update_packets\\dm_updata_enc_V1.3.1.sh");
-	//if (ret != LW_RETURN_OK)
-	//{
-	//	printf("LWOpenDevice function call failed: %s\n", LWGetReturnCodeDescriptor(ret));
-	//	system("pause");
-	//	return 0;
-	//}
+	ret = LWUpdateFirmware(handleList[index], "C:\\Users\\12267\\Desktop\\DATA\\update_packets\\dm_updata_enc_V1.3.1.sh");
+	if (ret != LW_RETURN_OK)
+	{
+		printf("LWOpenDevice function call failed: %s\n", LWGetReturnCodeDescriptor(ret));
+		system("pause");
+		return 0;
+	}
 
 	/*
 	// 设置滤波
