@@ -44,7 +44,7 @@
 
 
 ///< 循环队列最大节点数
-#define LOOP_QUEUE_SIZE    4
+#define LOOP_QUEUE_SIZE  5
 ///< 控制端口的端口号
 #define COMMAND_PORT 50660
 ///< 数据端口的端口号
@@ -316,30 +316,7 @@ namespace algNS
 
 namespace ljhNS
 {
-/// ******************************************* 内部工具函数 *******************************************
-
-	// 获取文件的MD5值。
-	static LWReturnCode getFileMD5(const std::string& fileName, unsigned char* md5, unsigned int& md5_len)
-	{
-		// 打开文件
-		std::ifstream file(fileName, std::ios::binary | std::ios::in);
-		if (!file.is_open()) return LW_RETURN_FILE_OPEN_ERROR;
-		// 创建上下文
-		EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
-		EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
-		char buffer[10240];
-		while (file.read(buffer, 10240) || file.good())
-		{
-			EVP_DigestUpdate(mdctx, buffer, file.gcount());
-		}
-		file.close();
-		// 计算并获取结果
-		EVP_DigestFinal_ex(mdctx, md5, &md5_len);
-		// 清理并释放资源
-		EVP_MD_CTX_free(mdctx);
-
-		return LW_RETURN_OK;
-	}
+	/// ******************************************* 内部工具函数 *******************************************
 
 	// 从含有路径的文件名里截取文件名。
 	static std::string getFileNameFromStr(const char* str)
@@ -380,6 +357,32 @@ namespace ljhNS
 		}
 
 		return buff;
+	}
+
+	// 获取文件的MD5值。
+	static LWReturnCode getFileMD5(const std::string& fileName, unsigned char* md5, unsigned int* md5_len)
+	{
+		// 打开文件
+		std::ifstream file(fileName, std::ios::binary | std::ios::in);
+		if (!file.is_open()) return LW_RETURN_FILE_OPEN_ERROR;
+		// 创建上下文
+		EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+		EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+		char buffer[4096];
+		while (file.good())
+		{
+			file.read(buffer, 4096);
+			EVP_DigestUpdate(mdctx, buffer, file.gcount());
+		}
+		file.close();
+
+		// 计算并获取结果
+		EVP_DigestFinal_ex(mdctx, md5, md5_len);
+		//printf("md5: %s\n", ljhNS::getHexStringFromBytes(md5, 16, ' ').c_str());
+		// 清理并释放资源
+		EVP_MD_CTX_free(mdctx);
+
+		return LW_RETURN_OK;
 	}
 
 	// 当特定的套接字函数指示发生了错误时，应立即调用此函数以检索失败的函数调用的扩展错误代码描述信息。
@@ -887,7 +890,7 @@ namespace ljhNS
 		uint32_t			mark = 0;
 		uint32_t			serial = 0;
 		uint32_t			size = 0;
-		LWRgbTransferFormat	rgbTFormat;
+		LWRgbTransferFormat	rgbTFormat = LW_YVU420_NV12;
 		LWTemperature		temperature{};
 		LWTimeStamp			time{};
 		LWVariant*			variant = nullptr;
@@ -973,7 +976,7 @@ namespace ljhNS
 		int32_t		size = 0;
 		uint32_t	writeIndex = 0;
 		uint32_t	writeCounter = 0;
-		DataNode* data[LOOP_QUEUE_SIZE]{};
+		DataNode*	data[LOOP_QUEUE_SIZE]{};
 	};
 
 
@@ -982,8 +985,9 @@ namespace ljhNS
 	{
 	public:
 		CommandSFrame(uint16_t command = 0xff, int32_t len = COMMAND_MAX_SIZE) {
-			bufferLen = len;
-			buffer = new uint8_t[len]{
+
+			bufferLen = (len > 18) ? len : 18;
+			buffer = new uint8_t[bufferLen] {
 				0xA5, 0x5A, 0xAA, 0x55,     //0  帧头
 				PROTOCOL_VERSION,           //4  协议版本
 				0x00,                       //5  命令类别
@@ -1068,7 +1072,7 @@ namespace ljhNS
 				return;
 			}
 
-			if ((bufferLen - 18) < len)
+			if ((  - 18) < len)
 			{
 				bufferLen = len + 18;
 				auto new_buffer = new uint8_t[bufferLen];
@@ -1318,18 +1322,32 @@ namespace ljhNS
 	};
 
 
+	/// @brief 用于设备调用的中间层，解决IP冲突，多网卡冲突
+	class DeviceHandle;
+	struct DeviceHandleBond
+	{
+		sockaddr_in		remoteAddr;
+		sockaddr_in		localAddr;
+		LWDeviceHandle	handle;
+		DeviceHandle*	devHandle;
+		std::string     sn;
+		std::string     describe;
+		std::string		type;
+	};
+
+
 	/// @brief 设备管理类
 	class DeviceHandle
 	{
 	public:
-		explicit DeviceHandle(LWDeviceHandle _handle);
+		DeviceHandle(std::string sn, std::string type);
 		DeviceHandle(DeviceHandle&& obj) = delete;
 		DeviceHandle(const DeviceHandle& obj) = delete;
 		DeviceHandle& operator=(DeviceHandle&& obj) = delete;
 		DeviceHandle& operator=(const DeviceHandle& obj) = delete;
 		~DeviceHandle();
 
-		LWReturnCode OpenDevice();
+		LWReturnCode OpenDevice(const DeviceHandleBond& bonder);
 		LWReturnCode CloseDevice();
 		LWReturnCode ReconnectDevice(uint32_t t);
 		LWReturnCode RebootDevice();
@@ -1463,7 +1481,7 @@ namespace ljhNS
 
 
 	public:
-		bool	isPro = false;
+		// 用于数据流的处理判定标志
 		bool	depthEnable = true;
 		bool	ampEnable = false;
 		bool	irEnable = true;
@@ -1479,13 +1497,15 @@ namespace ljhNS
 		std::atomic<bool>	isD2REnable{ false };
 		std::atomic<bool>	hasRgbModule{ false };
 
-		int32_t			tofWidth = TOF_MAX_PIX_COLS;
+
+		// 用于数据流的预置处理参数
+		int32_t			tofWidth  = TOF_MAX_PIX_COLS;
 		int32_t			tofHeight = TOF_MAX_PIX_ROWS;
 		int32_t			tofPixels = TOF_MAX_PIX_NUMBER;
-		int32_t			rgbWidth = RGB_MAX_PIX_COLS;
+		int32_t			rgbWidth  = RGB_MAX_PIX_COLS;
 		int32_t			rgbHeight = RGB_MAX_PIX_ROWS;
 		int32_t			rgbPixels = RGB_MAX_PIX_NUMBER;
-		uint32_t		timeout = 3000;
+		uint32_t		timeout   = 3000;
 		int32_t			irGMMGain = 255;
 		int32_t		    r2dRunCount = 0;
 		int32_t		    d2rRunCount = 0;
@@ -1495,16 +1515,7 @@ namespace ljhNS
 		uint32_t		d2rArgRenew = 0;
 		uint32_t		cal_mode = 0x00;
 
-		/*  临时添加 */
-		uint64_t act_rcve_num_flg = 0;
-		uint64_t act_rcve_num_rgb = 0;
-		uint64_t act_rcve_num_rde = 0;
-		uint64_t act_rcve_num_tof = 0;
-		uint64_t act_rcve_num_tde = 0;
-		uint64_t act_rcve_num_alg = 0;
-		uint64_t act_rcve_num_col = 0;
-		uint64_t act_rcve_num_tot = 0;
-		/*****************************/
+		LWDeviceHandle	handle = 0;
 
 		SOCKET			broadcastSocket = INVALID_SOCKET;
 
@@ -1518,10 +1529,6 @@ namespace ljhNS
 		LWSensorIntrinsicParam	rgbInArg{};
 		LWSensorExtrinsicParam	rgbOutArg{};
 		LWIMUExtrinsicParam		imuOutArg{ 1,0,0, 0,1,0, 0,0,1 };
-
-		std::string     _SN_;
-		std::string     describe;
-		std::string     deviceType;
 
 		DataNode* tofNode;
 		DataNode* rgbNode;
@@ -1578,10 +1585,11 @@ namespace ljhNS
 
 		float               d2rScale = 2.5f;
 
-		LWDeviceHandle      handle = 0;
 		LWTriggerMode       triggerMode = LW_TRIGGER_ACTIVE;
 		LWTimeStamp		    rgbTimeStamp{};
 		LWTimeStamp		    tofTimeStamp{};
+		std::string			_SN_;
+		std::string			deviceType;
 
 		DataNode* tofRecvNode;
 		DataNode* rgbRecvNode;
@@ -1617,6 +1625,7 @@ namespace ljhNS
 
 	};
 
+
 	/// @brief 用于全局变量的自动化管理。
 	class AutoInitGlobalResources
 	{
@@ -1638,16 +1647,17 @@ namespace ljhNS
 		std::atomic<bool>	initEnable;
 		std::string			errorInfo;
 
-		std::unordered_set<uint64_t> ipConflictSet;
-		std::map<std::string, DeviceHandle*>	strDeviceMap;
-		std::map<LWDeviceHandle, DeviceHandle*> numDeviceMap;
+		std::unordered_multiset<uint32_t>			ipConflictSet;
+		std::unordered_set<std::string>				handleExpireSet;
+		std::map<std::string, DeviceHandle*>		strDeviceMap;
+		std::map<LWDeviceHandle, DeviceHandleBond>	numDeviceMap;
 
 	} gGlobal;
 
 }
 
 
-ljhNS::DeviceHandle::DeviceHandle(LWDeviceHandle _handle): handle(_handle)
+ljhNS::DeviceHandle::DeviceHandle(std::string sn, std::string type) : _SN_(sn), deviceType(type)
 {
 	aliveEnable.store(true);
 
@@ -1672,17 +1682,6 @@ ljhNS::DeviceHandle::DeviceHandle(LWDeviceHandle _handle): handle(_handle)
 
 ljhNS::DeviceHandle::~DeviceHandle()
 {
-	if (act_rcve_num_flg > 0)
-		LOG_INFO_OUT("Data Record: RGB: %llu, RDE: %llu, TOF: %llu, TDE: %llu, ALG: %llu, COL: %llu, TOT: %llu",
-			act_rcve_num_rgb,
-			act_rcve_num_rde,
-			act_rcve_num_tof,
-			act_rcve_num_tde,
-			act_rcve_num_alg,
-			act_rcve_num_col,
-			act_rcve_num_tot);
-	act_rcve_num_flg = 0;
-
 	aliveEnable.store(false);
 	connectEnable.store(false);
 	isR2DEnable.store(false);
@@ -1776,7 +1775,6 @@ void ljhNS::DeviceHandle::rawDataRecvThread()
 {
 	ThreadCounter _tc_{ threadCounter };
 
-	int					k = 0;
 	uint32_t			magic = 2774182485U;
 	uint32_t			serial{};
 	LWTimeStamp			time{};
@@ -1858,8 +1856,6 @@ void ljhNS::DeviceHandle::rawDataRecvThread()
 					rgbRecvNode->size = read_len;
 					rgbRecvNode->rgbTFormat = LWRgbTransferFormat(u_recv_buf[25]);
 
-					++act_rcve_num_rgb;
-
 					// 数据同步
 					rgbWriteMutex.lock();
 					std::swap(rgbRecvNode, rgbSwapNode);
@@ -1888,7 +1884,7 @@ void ljhNS::DeviceHandle::rawDataRecvThread()
 						
 					#ifdef LW_ZHONGRILONG_PROJ
 						// 数据偏移统计
-						k = (u_recv_buf[92] < 2) ? 160 : (52 * u_recv_buf[92] + 108);
+						auto k = (u_recv_buf[92] < 2) ? 160 : (52 * u_recv_buf[92] + 108);
 						if (head_len > k)
 						{
 							// 中日龙---安防数据
@@ -1936,8 +1932,7 @@ void ljhNS::DeviceHandle::rawDataRecvThread()
 					tofRecvNode->time = time;
 					tofRecvNode->size = read_len;
 
-					++act_rcve_num_tof;
-
+					// 数据同步	
 					tofWriteMutex.lock();
 					std::swap(tofRecvNode, tofSwapNode);
 					tofReadEnable.store(true);
@@ -2001,8 +1996,6 @@ void ljhNS::DeviceHandle::tofDataHandleThread()
 			std::swap(tofHandleNode, tofSwapNode);
 		}
 
-		++act_rcve_num_tde;
-
 		//
 		dataReadMutex.lock();
 		readEnable.store(true);
@@ -2038,14 +2031,15 @@ void ljhNS::DeviceHandle::rgbDataHandleThread()
 				img,
 				cv::COLOR_YUV2RGB_NV12
 			);
+
 			// 畸变校准
 			if (rgbDistortionEnable) cv::remap(img, img, rgbCalibMap1, rgbCalibMap2, cv::INTER_LINEAR);
-			//if (rgbDistortionEnable) cv::remap(img, dst, rgbCalibMap1, rgbCalibMap2, cv::INTER_NEAREST);
+			//if (rgbDistortionEnable) cv::remap(img, img, rgbCalibMap1, rgbCalibMap2, cv::INTER_NEAREST);
 		}
 		else if (rgbSrcNode->rgbTFormat == LWRgbTransferFormat::LW_BGR_565)
 		{
 			// 格式转换
-			cv::cvtColor(cv::Mat(1200, 1600, CV_8UC2, rgbSrcNode->data()), img, cv::COLOR_BGR5652BGR);
+			cv::cvtColor(cv::Mat(1200, 1600, CV_8UC2, rgbSrcNode->data()), img, cv::COLOR_BGR5652RGB);
 			// 畸变校准
 			if (rgbDistortionEnable) cv::remap(img, img, rgbCalibMap1, rgbCalibMap2, cv::INTER_NEAREST);
 		}
@@ -2057,8 +2051,8 @@ void ljhNS::DeviceHandle::rgbDataHandleThread()
 				cv::remap(
 					cv::Mat(rgbHeight, rgbWidth, CV_8UC3, rgbSrcNode->data()),
 					img,
-					rgbCalibMap1, 
-					rgbCalibMap2, 
+					rgbCalibMap1,
+					rgbCalibMap2,
 					cv::INTER_NEAREST
 				);
 			}
@@ -2067,8 +2061,6 @@ void ljhNS::DeviceHandle::rgbDataHandleThread()
 				memcpy(rgbDstNode->data(), rgbSrcNode->data(), rgbSrcNode->size);
 			}
 		}
-
-		++act_rcve_num_rde;
 
 		// 
 		rgbDstNode->serial = rgbSrcNode->serial;
@@ -2090,104 +2082,91 @@ void ljhNS::DeviceHandle::dataSyncThread()
 
 	while (true)
 	{
-		std::unique_lock<std::mutex> tof_lock{ dataReadMutex };
-		dataReadNotify.wait(tof_lock, [this] { return readEnable.load() || !aliveEnable.load(); });
-		if (!aliveEnable.load()) break;
-
-		readEnable.store(false);
-
-		// 获取TOF和RGB最新数据
-		auto tof_node = tofDataReadQueue.latestNode();
-		auto rgb_node = rgbDataReadQueue.latestNode();
-
-		// 对齐判定
-		if (dataSyncEnable && isAlign.load())
 		{
-			// 帧数据的序列号必须相等
-			if (tof_node->serial != rgb_node->serial)
+			std::unique_lock<std::mutex> tof_lock{ dataReadMutex };
+			dataReadNotify.wait(tof_lock, [this] { return readEnable.load() || !aliveEnable.load(); });
+			if (!aliveEnable.load()) break;
+
+			readEnable.store(false);
+
+			// 获取TOF和RGB最新数据
+			auto tof_node = tofDataReadQueue.latestNode();
+			auto rgb_node = rgbDataReadQueue.latestNode();
+
+			// 对齐判定
+			if (dataSyncEnable && isAlign.load())
 			{
-				if (tof_node->serial < rgb_node->serial)
+				// 帧数据的序列号必须相等
+				if (tof_node->serial != rgb_node->serial)
 				{
-					rgb_node = rgbDataReadQueue.find(tof_node->serial);
-					if (rgb_node == nullptr) continue;
+					if (tof_node->serial < rgb_node->serial)
+					{
+						rgb_node = rgbDataReadQueue.find(tof_node->serial);
+						if (rgb_node == nullptr) continue;
+					}
+					else
+					{
+						tof_node = tofDataReadQueue.find(rgb_node->serial);
+						if (tof_node == nullptr) continue;
+					}
 				}
-				else
+
+				// 时间戳必须比前一帧的大，以防止帧回跳
+				if (tofTimeStamp.tv_sec > tof_node->time.tv_sec) continue;
+				if (tofTimeStamp.tv_sec < tof_node->time.tv_sec || tofTimeStamp.tv_usec < tof_node->time.tv_usec)
 				{
-					tof_node = tofDataReadQueue.find(rgb_node->serial);
-					if (tof_node == nullptr) continue;
+					tofTimeStamp = tof_node->time;
+
+					syncDataMutex.lock();
+					tofDataReadQueue.dequeue(tof_node->mark, tofNode);
+					rgbDataReadQueue.dequeue(rgb_node->mark, rgbNode);
+					readyEnable.store(true);
+					syncDataMutex.unlock();
+					syncDataNotify.notify_one();
 				}
 			}
-			
-			// 时间戳必须比前一帧的大，以防止帧回跳
-			if (tofTimeStamp.tv_sec > tof_node->time.tv_sec) continue;
-			if (tofTimeStamp.tv_sec < tof_node->time.tv_sec || tofTimeStamp.tv_usec < tof_node->time.tv_usec)
+			else
 			{
-				tofTimeStamp = tof_node->time;
-
 				syncDataMutex.lock();
-				tofDataReadQueue.dequeue(tof_node->mark, tofNode);
-				rgbDataReadQueue.dequeue(rgb_node->mark, rgbNode);
+				if (tof_node->update)
+				{
+					// 时间戳必须比前一帧的大，防止帧回跳
+					if ((tof_node->time.tv_sec > tofTimeStamp.tv_sec)
+						|| ((tof_node->time.tv_sec == tofTimeStamp.tv_sec) && (tof_node->time.tv_usec > tofTimeStamp.tv_usec)))
+					{
+						tofTimeStamp = tof_node->time;
+						tofDataReadQueue.dequeue(tof_node->mark, tofNode);
+					}
+				}
+				else {
+					tofNode->update = false;
+				}
+
+				if (rgb_node->update)
+				{
+					// 时间戳必须比前一帧的大，防止帧回跳
+					if ((rgb_node->time.tv_sec > rgbTimeStamp.tv_sec)
+						|| ((rgb_node->time.tv_sec == rgbTimeStamp.tv_sec) && (rgb_node->time.tv_usec > rgbTimeStamp.tv_usec)))
+					{
+						rgbTimeStamp = rgb_node->time;
+						rgbDataReadQueue.dequeue(rgb_node->mark, rgbNode);
+					}
+				}
+				else {
+					rgbNode->update = false;
+				}
+
 				readyEnable.store(true);
 				syncDataMutex.unlock();
 				syncDataNotify.notify_one();
-
-				++act_rcve_num_alg;
-
-
-				if ((_frameReadyCallback.find(handle)!= _frameReadyCallback.end()) && (_frameReadyCallback[handle] != nullptr))
-					_frameReadyCallback[handle](_pUserData2[handle]);
-				else if (frameReadyCallback != nullptr) 
-					frameReadyCallback(handle, pUserData2);
-
-				continue;
 			}
 		}
-		else
-		{
-			syncDataMutex.lock();
-			if (tof_node->update)
-			{
-				// 时间戳必须比前一帧的大，防止帧回跳
-                if ((tof_node->time.tv_sec > tofTimeStamp.tv_sec) 
-					|| ((tof_node->time.tv_sec == tofTimeStamp.tv_sec) && (tof_node->time.tv_usec > tofTimeStamp.tv_usec)))
-                {
-					tofTimeStamp = tof_node->time;
-					tofDataReadQueue.dequeue(tof_node->mark, tofNode);
-                }
-			}
-			else {
-				tofNode->update = false;
-			}
-			
-			if(rgb_node->update) 
-			{
-				// 时间戳必须比前一帧的大，防止帧回跳
-                if ((rgb_node->time.tv_sec > rgbTimeStamp.tv_sec)
-                    || ((rgb_node->time.tv_sec == rgbTimeStamp.tv_sec) && (rgb_node->time.tv_usec > rgbTimeStamp.tv_usec)))
-                {
-					rgbTimeStamp = rgb_node->time;
-					rgbDataReadQueue.dequeue(rgb_node->mark, rgbNode);
-                }
-			}
-			else {
-				rgbNode->update = false;
-			}
-
-
-			++act_rcve_num_alg;
-
-
-			readyEnable.store(true);
-			syncDataMutex.unlock();
-			syncDataNotify.notify_one();
-
-			if ((_frameReadyCallback.find(handle) != _frameReadyCallback.end()) && (_frameReadyCallback[handle] != nullptr))
-				_frameReadyCallback[handle](_pUserData2[handle]);
-			else if (frameReadyCallback != nullptr) 
-				frameReadyCallback(handle, pUserData2);
-
-			continue;
-		}
+		
+		// 触发回调
+		if ((_frameReadyCallback.find(handle) != _frameReadyCallback.end()) && (_frameReadyCallback[handle] != nullptr))
+			_frameReadyCallback[handle](_pUserData2[handle]);
+		else if (frameReadyCallback != nullptr)
+			frameReadyCallback(handle, pUserData2);
 	}
 }
 
@@ -2541,8 +2520,16 @@ void ljhNS::DeviceHandle::depthToRgbThread(int threadID, int srcStartRow, int sr
 			}
 
 			// 缩放图像大小
-			cv::resize(d2rInputImg, d2rOutputImg, cv::Size(rgbWidth, rgbHeight), 0, 0, cv::INTER_NEAREST);
-			cv::resize(ir2rInputImg, ir2rOutputImg, cv::Size(rgbWidth, rgbHeight), 0, 0, cv::INTER_NEAREST);
+			if(d2rScale == 2.5f) 
+			{
+				cv::resize(d2rInputImg, d2rOutputImg, cv::Size(rgbWidth, rgbHeight), 0, 0, cv::INTER_NEAREST);
+				cv::resize(ir2rInputImg, ir2rOutputImg, cv::Size(rgbWidth, rgbHeight), 0, 0, cv::INTER_NEAREST);
+			}
+			else
+			{
+				d2rInputImg.copyTo(d2rOutputImg);
+				ir2rInputImg.copyTo(ir2rOutputImg);
+			}
 
 			d2rNotify.notify_all();
 		}
@@ -2574,11 +2561,14 @@ LWReturnCode ljhNS::DeviceHandle::ExecuteCommand(CommandSFrame& command)
 	return LW_RETURN_NETWORK_ERROR;
 }
 
-LWReturnCode ljhNS::DeviceHandle::OpenDevice()
+LWReturnCode ljhNS::DeviceHandle::OpenDevice(const DeviceHandleBond& bonder)
 {
 	LOG_INFO_OUT("<%s>", _SN_.c_str());
 
-	if(!connectEnable.load())
+	//
+	if((bonder.remoteAddr.sin_addr.s_addr != remoteAddr.sin_addr.s_addr) 
+		|| (bonder.localAddr.sin_addr.s_addr != localAddr.sin_addr.s_addr)
+		|| (!connectEnable.load()))
     {
 		// 清理连接
 		closeSocket(dataSocket);
@@ -2588,6 +2578,8 @@ LWReturnCode ljhNS::DeviceHandle::OpenDevice()
 		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
 		// 探测设备占用情况
+		localAddr = bonder.localAddr;
+		remoteAddr = bonder.remoteAddr;
 		SOCKET _socket = gSocketMap[localAddr.sin_addr.s_addr];
 		setNetworkTimeout(_socket, timeout);
 		CommandSFrame command{ C_Discovery };
@@ -2621,11 +2613,13 @@ LWReturnCode ljhNS::DeviceHandle::OpenDevice()
 			|| !connectToServer(commandSocket, remoteAddr, timeout))
         {
 			auto error_str = getNetworkLastError();
-			gGlobal.errorInfo = describe.empty() ? (error_str.empty() ? "Control socket connection timeout!" : error_str) : describe;
+			gGlobal.errorInfo = bonder.describe.empty() ? (error_str.empty() ? "Control socket connection timeout!" : error_str) : bonder.describe;
 			LOG_ERROR_OUT("<%s>, %s", _SN_.c_str(), gGlobal.errorInfo.c_str());
 			return LW_RETURN_CUSTOM_ERROR;
         }
-
+		
+		recvAddr = bonder.remoteAddr;
+		recvAddr.sin_port = htons(DATA_PORT);
         dataSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if ((setsockopt(dataSocket, SOL_SOCKET, SO_REUSEADDR, (char*)&bOpt, sizeof(bOpt)) == SOCKET_ERROR)
 			|| (bind(dataSocket, (sockaddr*)(&localAddr), sizeof(localAddr)) == SOCKET_ERROR)
@@ -2643,7 +2637,7 @@ LWReturnCode ljhNS::DeviceHandle::OpenDevice()
 	ProvisionalAuthority val{ openEnable };
 
 	// 资源初始化
-    auto RC = GetResolution(LWSensorType::LW_RGB_SENSOR, rgbWidth, rgbHeight);
+	auto RC = GetResolution(LWSensorType::LW_RGB_SENSOR, rgbWidth, rgbHeight);
     if (hasRgbModule.load())
     {
 		rgbPixels = rgbWidth * rgbHeight;
@@ -2697,7 +2691,16 @@ LWReturnCode ljhNS::DeviceHandle::OpenDevice()
 	RC = GetIMUExtrinsicParam(imuOutArg);
 	if (RC != LW_RETURN_OK) return RC;
 
+	if (deviceType.empty())
+	{
+		char buffer[32];
+		RC = GetDeviceType(buffer, 32);
+		if (RC != LW_RETURN_OK) return RC;
+		deviceType = std::string(buffer);
+	}
+
 	val.authorize();
+	handle = bonder.handle;
 
     return  LW_RETURN_OK;
 }
@@ -2706,26 +2709,13 @@ LWReturnCode ljhNS::DeviceHandle::CloseDevice()
 {
 	LOG_INFO_OUT("<%s>", _SN_.c_str());
 
-	if (act_rcve_num_flg > 0)
-		LOG_INFO_OUT("Data Record: RGB: %llu, RDE: %llu, TOF: %llu, TDE: %llu, ALG: %llu, COL: %llu, TOT: %llu",
-			act_rcve_num_rgb,
-			act_rcve_num_rde,
-			act_rcve_num_tof,
-			act_rcve_num_tde,
-			act_rcve_num_alg,
-			act_rcve_num_col,
-			act_rcve_num_tot);
-	act_rcve_num_flg = 0;
-
 	openEnable.store(false);
+	connectEnable.store(false);
 
-	if (connectEnable.load())
-	{
-		connectEnable.store(false);
+	closeSocket(commandSocket);
+	closeSocket(dataSocket);
 
-		closeSocket(commandSocket);
-		closeSocket(dataSocket);
-	}
+	handle = 0;
 
 	return LW_RETURN_OK;
 }
@@ -2816,6 +2806,8 @@ LWReturnCode ljhNS::DeviceHandle::RebootDevice()
 
 		closeSocket(commandSocket);
 		closeSocket(dataSocket);
+
+		handle = 0;
 	}
 
 	return ret;
@@ -2852,6 +2844,8 @@ LWReturnCode ljhNS::DeviceHandle::RemoveConfigureInfo()
 
 		closeSocket(commandSocket);
 		closeSocket(dataSocket);
+
+		handle = 0;
 	}
 
 	return ret;
@@ -2875,6 +2869,8 @@ LWReturnCode ljhNS::DeviceHandle::RestoreFactoryConfigureInfo()
 
 		closeSocket(commandSocket);
 		closeSocket(dataSocket);
+
+		handle = 0;
 	}
 
 	return ret;
@@ -2887,18 +2883,10 @@ LWReturnCode ljhNS::DeviceHandle::StartStream()
 	LOG_INFO_OUT("<%s>", _SN_.c_str());
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
-	
-	CommandSFrame command{ C_Start };
-	
+
 	readyEnable.store(false);
-	act_rcve_num_flg = 1;
-	act_rcve_num_rgb = 0;
-	act_rcve_num_rde = 0;
-	act_rcve_num_tof = 0;
-	act_rcve_num_tde = 0;
-	act_rcve_num_alg = 0;
-	act_rcve_num_col = 0;
-	act_rcve_num_tot = 0;
+
+	CommandSFrame command{ C_Start };
 
 	return ExecuteCommand(command);
 }
@@ -2908,17 +2896,6 @@ LWReturnCode ljhNS::DeviceHandle::StopStream()
 	std::lock_guard<std::mutex> guard{ nrMutex };
 
 	LOG_INFO_OUT("<%s>", _SN_.c_str());
-
-	if(act_rcve_num_flg > 0)
-	LOG_INFO_OUT("Data Record: RGB: %llu, RDE: %llu, TOF: %llu, TDE: %llu, ALG: %llu, COL: %llu, TOT: %llu",
-		act_rcve_num_rgb,
-		act_rcve_num_rde,
-		act_rcve_num_tof,
-		act_rcve_num_tde,
-		act_rcve_num_alg,
-		act_rcve_num_col,
-		act_rcve_num_tot);
-	act_rcve_num_flg = 0;
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
 
@@ -3128,6 +3105,12 @@ LWReturnCode ljhNS::DeviceHandle::SetTransformRgbToDepthEnable(bool enable)
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
 
+	if (tofHeight != 480 && tofWidth != 640)
+	{
+		gGlobal.errorInfo = "The current TOF resolution does not support this feature.";
+		return LW_RETURN_CUSTOM_ERROR;
+	}
+
 	if (enable)
 	{
 		if (!isR2DEnable.load())
@@ -3164,6 +3147,12 @@ LWReturnCode ljhNS::DeviceHandle::SetTransformDepthToRgbEnable(bool enable)
 	LOG_INFO_OUT("<%s>, Enable: %d", _SN_.c_str(), enable);
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
+
+	if (tofHeight != 480 && tofWidth != 640)
+	{
+		gGlobal.errorInfo = "The current TOF resolution does not support this feature.";
+		return LW_RETURN_CUSTOM_ERROR;
+	}
 
 	if (enable)
 	{
@@ -3368,9 +3357,7 @@ LWReturnCode ljhNS::DeviceHandle::SetResolution(LWSensorType sensorType, int32_t
 	auto RC = ExecuteCommand(command);
 	if (RC == LW_RETURN_OK)
 	{
-		rgbWidth = width;
-		rgbHeight = height;
-		rgbPixels = rgbWidth * rgbHeight;
+		openEnable.store(false);
 	}
 
 	return RC;
@@ -3399,6 +3386,8 @@ LWReturnCode ljhNS::DeviceHandle::GetResolution(LWSensorType type, int32_t &widt
 
             width = ntohs(*((uint16_t*)(data + 1)));
             height = ntohs(*((uint16_t*)(data + 3)));
+
+			d2rScale = ((width == 640) && (height == 480)) ? 1.0f : 2.5f;
         }
 
         return RC;
@@ -3811,8 +3800,6 @@ LWReturnCode ljhNS::DeviceHandle::SetRgbSensorGamma(int32_t value)
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
 
-	return LW_RETURN_NOT_SUPPORTED;
-
 	if (value > 300 || value < 64) return LW_RETURN_ARG_OUT_OF_RANGE;
 
 	CommandSFrame command{ C_SetRgbCameraGamma };
@@ -3830,8 +3817,6 @@ LWReturnCode ljhNS::DeviceHandle::GetRgbSensorGamma(int32_t& value)
 	LOG_INFO_OUT("<%s>", _SN_.c_str());
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
-
-	return LW_RETURN_NOT_SUPPORTED;
 
 	CommandSFrame command{ C_GetRgbCameraGamma };
 
@@ -3872,8 +3857,6 @@ LWReturnCode ljhNS::DeviceHandle::GetRgbSensorBrightness(int32_t& value)
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
 
-	return LW_RETURN_NOT_SUPPORTED;
-
 	CommandSFrame command{ C_GetRgbCameraBrightness };
 
 	auto RC = ExecuteCommand(command);
@@ -3893,8 +3876,6 @@ LWReturnCode ljhNS::DeviceHandle::SetRgbSensorContrastRatio(int32_t value)
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
 
-	return LW_RETURN_NOT_SUPPORTED;
-
 	if (value > 95 || value < 0) return LW_RETURN_ARG_OUT_OF_RANGE;
 
 	CommandSFrame command{ C_SetRgbCameraContrastRatio };
@@ -3912,8 +3893,6 @@ LWReturnCode ljhNS::DeviceHandle::GetRgbSensorContrastRatio(int32_t& value)
 	LOG_INFO_OUT("<%s>", _SN_.c_str());
 
 	if (!openEnable.load()) return LW_RETURN_UNOPENED;
-
-	return LW_RETURN_NOT_SUPPORTED;
 
 	CommandSFrame command{ C_GetRgbCameraContrastRatio };
 
@@ -4030,7 +4009,21 @@ LWReturnCode ljhNS::DeviceHandle::SetNetworkInfo(LWNetworkInfo info)
 	}
 	command.setArgField(data, 9);
 
-	return ExecuteCommand(command);
+	auto ret = ExecuteCommand(command);
+	if (ret == LW_RETURN_OK)
+	{
+		// 清理连接
+		openEnable.store(false);
+		connectEnable.store(false);
+		closeSocket(dataSocket);
+		closeSocket(commandSocket);
+
+		// 初始化相关标记
+		handle = 0;
+		gGlobal.handleExpireSet.insert(_SN_);
+	}
+
+	return ret;
 }
 
 LWReturnCode ljhNS::DeviceHandle::GetNetworkInfo(LWNetworkInfo& info)
@@ -4264,7 +4257,7 @@ LWReturnCode ljhNS::DeviceHandle::GetDeviceSN(char* sn, int32_t bufferLen)
 	if (_SN_ != _sn)
 	{
 		gGlobal.strDeviceMap[_sn] = gGlobal.strDeviceMap[_SN_];
-		gGlobal.numDeviceMap[handle] = gGlobal.strDeviceMap[_SN_];
+		gGlobal.numDeviceMap[handle].devHandle = gGlobal.strDeviceMap[_SN_];
 		gGlobal.strDeviceMap.erase(_SN_);
 		_SN_ = _sn;
 	}
@@ -4290,6 +4283,7 @@ LWReturnCode ljhNS::DeviceHandle::GetDeviceType(char* type, int32_t bufferLen)
 	auto len = commandRecvFrame.getArgFieldLength();
 	if (len > bufferLen) return LW_RETURN_OUT_OF_MEMORY;
 
+	memset(type, 0, bufferLen);
 	memcpy(type, commandRecvFrame.getArgField(), len);
 	if (len != bufferLen) type[len] = '\0';
 	return LW_RETURN_OK;
@@ -4361,12 +4355,9 @@ LWReturnCode ljhNS::DeviceHandle::GetFrameReady()
 		gGlobal.d2rTF = true;
 		gGlobal.r2dTF = true;
 
-		++act_rcve_num_col;
-
 		return LW_RETURN_OK;
 	}
 
-	++act_rcve_num_tot;
 	return LW_RETURN_TIMEOUT;
 }
 
@@ -4771,7 +4762,7 @@ LWReturnCode ljhNS::DeviceHandle::SendFile(const char* fullname, uint32_t type)
 	buf[0] = type; // 文件类型
 	uint32_t val32 = htonl(file_size);
 	memcpy(buf + 1, &val32, 4);				// 文件长度
-	getFileMD5(fullname, buf + 5, val32); // 文件DM5信息
+	getFileMD5(fullname, buf + 5, nullptr); // 文件DM5信息
 	if (type != 0xf0)
 	{
 		command.setArgField(buf, 21);
@@ -5048,7 +5039,7 @@ LWReturnCode ljhNS::DeviceHandle::SetDeviceSN(const char* sn, int size)
 	if ((ret == LW_RETURN_OK) && (_SN_ != _sn))
 	{
 		gGlobal.strDeviceMap[_sn] = gGlobal.strDeviceMap[_SN_];
-		gGlobal.numDeviceMap[handle] = gGlobal.strDeviceMap[_SN_];
+		gGlobal.numDeviceMap[handle].devHandle = gGlobal.strDeviceMap[_SN_];
 		gGlobal.strDeviceMap.erase(_SN_);
 		_SN_ = _sn;
 	}
@@ -5782,6 +5773,7 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 	*findCount = 0;
 	ljhNS::gGlobal.numDeviceMap.clear();
 	ljhNS::gGlobal.ipConflictSet.clear();
+	ljhNS::gGlobal.handleExpireSet.clear();
 
 	// 获取本机所有地址信息，以备后续广播搜寻设备
 	std::vector<sockaddr_in> sockaddr_list;
@@ -5798,6 +5790,8 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 	for (const auto& local_addr : sockaddr_list)
 	{
 		thread_list.emplace_back([&local_addr, &_mutex, &deviceInfoList, &listCount, &findCount]()->void {
+			//// 
+			//printf("cocal ip: %s\n", inet_ntoa(local_addr.sin_addr));
 			// 广播地址
 			sockaddr_in to_addr{};
 			to_addr.sin_family = AF_INET;
@@ -5821,7 +5815,7 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 			while (true)
 			{
 				if (recvfrom(_socket, command.data(), command.maxBuffer(), 0, (sockaddr*)&from_addr, &addr_len) == SOCKET_ERROR) break;
-				
+
 				// 过滤掉IP为：66.66.66.66 的地址
 				if (from_addr.sin_addr.s_addr == 1111638594U) continue;
 
@@ -5832,9 +5826,10 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 					{
 						auto reply = (uint8_t*)(command.getArgField());
 
-						uint32_t devIP = from_addr.sin_addr.s_addr;
-						uint32_t locIP = local_addr.sin_addr.s_addr;
-						uint32_t devMrak = ntohl(*((uint32_t*)(reply + 13)));
+						uint32_t devIP		= from_addr.sin_addr.s_addr;
+						uint32_t locIP		= local_addr.sin_addr.s_addr;
+						uint32_t devMrak	= ntohl(*((uint32_t*)(reply + 13)));
+						uint32_t likIP		= ntohl(*((uint32_t*)(reply + 4)));
 
 						// 获取设备序列号
 						if (command.getArgFieldLength() < 31) continue;
@@ -5842,39 +5837,36 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 
 						// 获取设备类型(不可靠)
 						std::string devType;
-						auto t_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-						if (t_socket == INVALID_SOCKET) LOG_INFO_OUT("create socket: %s", ljhNS::getNetworkLastError().c_str());
-						ljhNS::setNetworkTimeout(t_socket, 1500);
-						ljhNS::CommandSFrame t_command{ C_GetDeviceType };
-						if (sendto(t_socket, t_command.data(), t_command.size(), MSG_NOSIGNAL, (sockaddr*)&from_addr, sizeof(from_addr)) != SOCKET_ERROR)
+						if (likIP == 0)
 						{
-							if (recvfrom(t_socket, t_command.data(), t_command.maxBuffer(), 0, (sockaddr*)&from_addr, &addr_len) != SOCKET_ERROR)
+							auto t_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+							if (t_socket == INVALID_SOCKET) LOG_INFO_OUT("create socket: %s", ljhNS::getNetworkLastError().c_str());
+							ljhNS::setNetworkTimeout(t_socket, 1500);
+							ljhNS::CommandSFrame t_command{ C_GetDeviceType };
+							if (sendto(t_socket, t_command.data(), t_command.size(), MSG_NOSIGNAL, (sockaddr*)&from_addr, sizeof(from_addr)) != SOCKET_ERROR)
 							{
-								if (t_command.isCommand(C_GetDeviceType) && (t_command.getCommandType() < 0x03))
+								if (recvfrom(t_socket, t_command.data(), t_command.maxBuffer(), 0, (sockaddr*)&from_addr, &addr_len) != SOCKET_ERROR)
 								{
-									if (t_command.getArgFieldLength() < 32)
+									if (t_command.isCommand(C_GetDeviceType) && (t_command.getCommandType() < 0x03))
 									{
-										devType = std::string(t_command.getArgField(), t_command.getArgFieldLength());
+										if (t_command.getArgFieldLength() < 32)
+										{
+											devType = std::string(t_command.getArgField(), t_command.getArgFieldLength());
+										}
 									}
 								}
 							}
+							ljhNS::closeSocket(t_socket);
 						}
-						ljhNS::closeSocket(t_socket);
-
+						
 						// 数据同步
 						std::lock_guard<std::mutex> guard{ _mutex };
 
 						// 生成设备唯一标识ID（设备句柄）
-						LWDeviceHandle id = 0;
-						auto idPtr = (char*)&id;
-						memcpy(idPtr, &devIP, 4);
-						memcpy(idPtr + 4, &locIP, 4);
+						LWDeviceHandle id = (static_cast<uint64_t>(locIP) << 32) | static_cast<uint64_t>(devIP);
 
-						// 判定设备句柄是否有重复, 以标注冲突IP（有出现设备IP相同的情况）
-						if (ljhNS::gGlobal.numDeviceMap.find(id) != ljhNS::gGlobal.numDeviceMap.end())
-						{
-							ljhNS::gGlobal.ipConflictSet.insert(id);
-						}
+						// 创建设备粘合剂
+						ljhNS::DeviceHandleBond bonder;
 
 						// 填充设备信息列表
 						if (*findCount < listCount)
@@ -5888,32 +5880,32 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 							memcpy(deviceInfoList[*findCount].type, devType.c_str(), devType.size());
 							inet_ntop(AF_INET, &devIP, deviceInfoList[*findCount].ip, 32);
 							inet_ntop(AF_INET, &locIP, deviceInfoList[*findCount].local_ip, 32);
-
 						}
 						++(*findCount);
 
 						// 设备判定
 						if (sn.find("DM") == std::string::npos)
 						{
-							ljhNS::gGlobal.numDeviceMap[id] = nullptr;
+							bonder.devHandle = nullptr;
+							ljhNS::gGlobal.numDeviceMap[id] = bonder;
+							ljhNS::gGlobal.ipConflictSet.insert(devIP);
 							continue;
 						}
 
 						// 根据序列号创建设备对象并保存到全局列表中
 						if (ljhNS::gGlobal.strDeviceMap.find(sn) == ljhNS::gGlobal.strDeviceMap.end())
-							ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(id);
-						//
-						ljhNS::gGlobal.numDeviceMap[id] = ljhNS::gGlobal.strDeviceMap[sn];
+						{
+							ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(sn, devType);
+							ljhNS::gGlobal.ipConflictSet.insert(devIP);
+						}
 
 						// 填充设备信息
-						auto handle = ljhNS::gGlobal.numDeviceMap[id];
-						handle->_SN_ = sn;
-						handle->deviceType = devType;
-						handle->describe.clear();
-						handle->localAddr = local_addr;
-						handle->remoteAddr = from_addr;
-						handle->recvAddr = from_addr;
-						handle->recvAddr.sin_port = htons(DATA_PORT);
+						bonder.devHandle = ljhNS::gGlobal.strDeviceMap[sn];
+						bonder.localAddr = local_addr;
+						bonder.remoteAddr = from_addr;
+						bonder.handle = id;
+						bonder.sn = sn;
+						bonder.type = devType;
 
 						// 粗略检测本机与设备的网段是否匹配
 						if (reply[8] == 0x01)
@@ -5923,9 +5915,9 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 								char buffer[256];
 								auto ipPtr1 = (unsigned char*)&locIP;
 								auto ipPtr2 = (unsigned char*)&devIP;
-								snprintf(buffer, 256, "The remote IP and the local IP are not in the same network segment and need to be adjusted to the same network segment. Local IP: %u.%u.%u.%u, Remote IP: %u.%u.%u.%u",
+								snprintf(buffer, 256, "The device IP and the local IP are not in the same network segment and need to be adjusted to the same network segment. Local IP: %u.%u.%u.%u, Remote IP: %u.%u.%u.%u",
 									ipPtr1[0], ipPtr1[1], ipPtr1[2], ipPtr1[3], ipPtr2[0], ipPtr2[1], ipPtr2[2], ipPtr2[3]);
-								handle->describe = std::string(buffer);
+								bonder.describe = std::string(buffer);
 							}
 						}
 						else
@@ -5933,13 +5925,15 @@ LWReturnCode LWGetDeviceInfoList(LWDeviceInfo* deviceInfoList, int32_t listCount
 							auto devip_c = (uint8_t*)(&devIP);
 							if (((devip_c[0] == 0xA9) && (devip_c[1] == 0xFE)) && ((reply[3] != 0xA9) || (reply[2] != 0xFE)))
 							{
-								handle->describe = "The remote device has enabled DHCP protocol, but the computer has a static IP and needs to be adjusted to match it.";
+								bonder.describe = "The device has enabled DHCP protocol, but the computer has a static IP and needs to be adjusted to match it.";
 							}
 						}
+
+						ljhNS::gGlobal.numDeviceMap[id] = bonder;
 					}
 					else
 					{
-						LOG_ERROR_OUT("The SDK does not match the device firmware version.");
+						LOG_ERROR_OUT("The communication protocol version between SDK and device does not match.");
 					}
 				}
 			}
@@ -5972,6 +5966,7 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 	*findCount = 0;
 	ljhNS::gGlobal.numDeviceMap.clear();
 	ljhNS::gGlobal.ipConflictSet.clear();
+	ljhNS::gGlobal.handleExpireSet.clear();
 
 	// 获取本机所有地址信息，以备后续广播搜寻设备
     std::vector<sockaddr_in> sockaddr_list;
@@ -6021,9 +6016,10 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
                     {
 						auto reply = (uint8_t*)(command.getArgField());
 
-						uint32_t devIP = from_addr.sin_addr.s_addr;
-						uint32_t locIP = local_addr.sin_addr.s_addr;
-                        uint32_t devMrak = ntohl(*((uint32_t*)(reply + 13)));
+						uint32_t devIP		= from_addr.sin_addr.s_addr;
+						uint32_t locIP		= local_addr.sin_addr.s_addr;
+                        uint32_t devMrak	= ntohl(*((uint32_t*)(reply + 13)));
+						uint32_t likIP		= ntohl(*((uint32_t*)(reply + 4)));
 
 						// 获取设备序列号
 						if (command.getArgFieldLength() < 31) continue;
@@ -6031,37 +6027,37 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 
 						// 获取设备类型(不可靠)
 						std::string devType;
-						auto t_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-						if (t_socket == INVALID_SOCKET) LOG_INFO_OUT("create socket: %s", ljhNS::getNetworkLastError().c_str());
-						ljhNS::setNetworkTimeout(t_socket, 1500);
-						ljhNS::CommandSFrame t_command{ C_GetDeviceType };
-						if (sendto(t_socket, t_command.data(), t_command.size(), MSG_NOSIGNAL, (sockaddr*)&from_addr, sizeof(from_addr)) != SOCKET_ERROR)
+						if (likIP == 0)
 						{
-							if (recvfrom(t_socket, t_command.data(), t_command.maxBuffer(), 0, (sockaddr*)&from_addr, &addr_len) != SOCKET_ERROR)
+							auto t_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+							if (t_socket == INVALID_SOCKET) LOG_INFO_OUT("create socket: %s", ljhNS::getNetworkLastError().c_str());
+							ljhNS::setNetworkTimeout(t_socket, 1500);
+							ljhNS::CommandSFrame t_command{ C_GetDeviceType };
+							if (sendto(t_socket, t_command.data(), t_command.size(), MSG_NOSIGNAL, (sockaddr*)&from_addr, sizeof(from_addr)) != SOCKET_ERROR)
 							{
-								if (t_command.isCommand(C_GetDeviceType) && (t_command.getCommandType() < 0x03))
+								if (recvfrom(t_socket, t_command.data(), t_command.maxBuffer(), 0, (sockaddr*)&from_addr, &addr_len) != SOCKET_ERROR)
 								{
-									devType = std::string(t_command.getArgField(), t_command.getArgFieldLength());
+									if (t_command.isCommand(C_GetDeviceType) && (t_command.getCommandType() < 0x03))
+									{
+										if (t_command.getArgFieldLength() < 32)
+										{
+											devType = std::string(t_command.getArgField(), t_command.getArgFieldLength());
+										}
+									}
 								}
 							}
+							ljhNS::closeSocket(t_socket);
 						}
-						ljhNS::closeSocket(t_socket);
-
+						
 						// 数据同步
 						std::lock_guard<std::mutex> guard{ _mutex };
 
 						// 生成设备唯一标识ID（设备句柄）
-						LWDeviceHandle id = 0;
-						auto idPtr = (char*)&id;
-						memcpy(idPtr, &devIP, 4);
-						memcpy(idPtr + 4, &locIP, 4);
+						LWDeviceHandle id = (static_cast<uint64_t>(locIP) << 32) | static_cast<uint64_t>(devIP);
 
-						// 判定设备句柄是否有重复, 以标注冲突IP（有出现设备IP相同的情况）
-						if (ljhNS::gGlobal.numDeviceMap.find(id) != ljhNS::gGlobal.numDeviceMap.end())
-						{
-							ljhNS::gGlobal.ipConflictSet.insert(id);
-						}
-
+						// 创建设备粘合剂
+						ljhNS::DeviceHandleBond bonder;
+						
 						// 填充设备信息列表
 						if (*findCount < listCount)
 						{
@@ -6072,25 +6068,27 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 						// 设备判定
 						if (sn.find("DM") == std::string::npos)
 						{
-							ljhNS::gGlobal.numDeviceMap[id] = nullptr;
+							bonder.devHandle = nullptr;
+							ljhNS::gGlobal.numDeviceMap[id] = bonder;
+							ljhNS::gGlobal.ipConflictSet.insert(devIP);
 							continue;
 						}
 
 						// 根据序列号创建设备对象并保存到全局列表中
 						if (ljhNS::gGlobal.strDeviceMap.find(sn) == ljhNS::gGlobal.strDeviceMap.end())
-							ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(id);
-						//
-						ljhNS::gGlobal.numDeviceMap[id] = ljhNS::gGlobal.strDeviceMap[sn];
-				
-						auto handle = ljhNS::gGlobal.numDeviceMap[id];
-						handle->_SN_ = sn;
-						handle->deviceType = devType;
-						handle->describe.clear();
-						handle->localAddr = local_addr;
-						handle->remoteAddr = from_addr;
-						handle->recvAddr = from_addr;
-						handle->recvAddr.sin_port = htons(DATA_PORT);
+						{
+							ljhNS::gGlobal.strDeviceMap[sn] = new ljhNS::DeviceHandle(sn, devType);
+							ljhNS::gGlobal.ipConflictSet.insert(devIP);
+						}
 						
+						// 填充设备信息
+						bonder.devHandle = ljhNS::gGlobal.strDeviceMap[sn];
+						bonder.localAddr = local_addr;
+						bonder.remoteAddr = from_addr;
+						bonder.handle = id;
+						bonder.sn = sn;
+						bonder.type = devType;
+
 						if (reply[8] == 0x01)
 						{
 							if ((devIP & devMrak) != (locIP & devMrak))
@@ -6100,7 +6098,7 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 								auto ipPtr2 = (unsigned char*)&devIP;
 								snprintf(buffer, 256, "The remote IP and the local IP are not in the same network segment and need to be adjusted to the same network segment. Local IP: %u.%u.%u.%u, Remote IP: %u.%u.%u.%u",
 									ipPtr1[0], ipPtr1[1], ipPtr1[2], ipPtr1[3], ipPtr2[0], ipPtr2[1], ipPtr2[2], ipPtr2[3]);
-								handle->describe = std::string(buffer);
+								bonder.describe = std::string(buffer);
 							}
 						}
 						else
@@ -6108,9 +6106,11 @@ LWReturnCode LWFindDevices(LWDeviceHandle *handleList, int32_t listCount, int32_
 							auto devip_c = (uint8_t*)(&devIP);
 							if (((devip_c[0] == 0xA9) && (devip_c[1] == 0xFE)) && ((reply[3] != 0xA9) || (reply[2] != 0xFE)))
 							{
-								handle->describe = "The remote device has enabled DHCP protocol, but the computer has a static IP and needs to be adjusted to match it.";
+								bonder.describe = "The remote device has enabled DHCP protocol, but the computer has a static IP and needs to be adjusted to match it.";
 							}
 						}
+
+						ljhNS::gGlobal.numDeviceMap[id] = bonder;
                     }
                     else
 					{
@@ -6138,12 +6138,19 @@ LWReturnCode LWOpenDevice(LWDeviceHandle handle)
     if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
         return LW_RETURN_HANDLE_MISMATCH;
 
-	if (ljhNS::gGlobal.ipConflictSet.find(handle) != ljhNS::gGlobal.ipConflictSet.end())
+	const auto& bonder = ljhNS::gGlobal.numDeviceMap[handle];
+
+	if (ljhNS::gGlobal.handleExpireSet.find(bonder.sn) != ljhNS::gGlobal.handleExpireSet.end())
+		return LW_RETURN_HANDLE_EXPIRE;
+
+	if (ljhNS::gGlobal.ipConflictSet.count(bonder.remoteAddr.sin_addr.s_addr) > 1)
 		return LW_RETURN_DEVICE_IP_CONFLICT;
 
-	if (ljhNS::gGlobal.numDeviceMap[handle] == nullptr) return LW_RETURN_DEVICE_INVALID;
+	if (bonder.devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
 
-    return ljhNS::gGlobal.numDeviceMap[handle]->OpenDevice();
+	if ((bonder.devHandle->handle != 0) && (bonder.devHandle->handle != handle)) return LW_RETURN_DEVICE_OCCUPIED;
+
+    return bonder.devHandle->OpenDevice(bonder);
 }
 
 LWReturnCode LWCloseDevice(LWDeviceHandle handle)
@@ -6154,7 +6161,11 @@ LWReturnCode LWCloseDevice(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->CloseDevice();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->CloseDevice();
 }
 
 LWReturnCode LWReconnectDevice(LWDeviceHandle handle, uint32_t t)
@@ -6165,7 +6176,11 @@ LWReturnCode LWReconnectDevice(LWDeviceHandle handle, uint32_t t)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->ReconnectDevice(t);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->ReconnectDevice(t);
 }
 
 LWReturnCode LWRebootDevice(LWDeviceHandle handle)
@@ -6174,7 +6189,11 @@ LWReturnCode LWRebootDevice(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->RebootDevice();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->RebootDevice();
 }
 
 LWReturnCode LWSaveConfigureInfo(LWDeviceHandle handle)
@@ -6183,7 +6202,11 @@ LWReturnCode LWSaveConfigureInfo(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SaveConfigureInfo();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SaveConfigureInfo();
 }
 
 LWReturnCode LWRemoveConfigureInfo(LWDeviceHandle handle)
@@ -6192,7 +6215,11 @@ LWReturnCode LWRemoveConfigureInfo(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->RemoveConfigureInfo();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->RemoveConfigureInfo();
 }
 
 LWReturnCode LWRestoreFactoryConfigureInfo(LWDeviceHandle handle)
@@ -6201,7 +6228,11 @@ LWReturnCode LWRestoreFactoryConfigureInfo(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->RestoreFactoryConfigureInfo();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->RestoreFactoryConfigureInfo();
 }
 
 LWReturnCode LWStartStream(LWDeviceHandle handle)
@@ -6210,7 +6241,11 @@ LWReturnCode LWStartStream(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->StartStream();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+	
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->StartStream();
 }
 
 LWReturnCode LWStopStream(LWDeviceHandle handle)
@@ -6219,7 +6254,11 @@ LWReturnCode LWStopStream(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->StopStream();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+	
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->StopStream();
 }
 
 LWReturnCode LWHasRgbModule(LWDeviceHandle handle, bool* value)
@@ -6228,7 +6267,11 @@ LWReturnCode LWHasRgbModule(LWDeviceHandle handle, bool* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->HasRgbModule(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->HasRgbModule(*value);
 }
 
 LWReturnCode LWSoftTrigger(LWDeviceHandle handle)
@@ -6237,7 +6280,11 @@ LWReturnCode LWSoftTrigger(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SoftTrigger();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SoftTrigger();
 }
 
 LWReturnCode LWSetDataReceiveType(LWDeviceHandle handle, LWDataRecvType type)
@@ -6246,7 +6293,11 @@ LWReturnCode LWSetDataReceiveType(LWDeviceHandle handle, LWDataRecvType type)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetDataReceiveType(type);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetDataReceiveType(type);
 }
 
 LWReturnCode LWSetTimeout(LWDeviceHandle handle, uint32_t t)
@@ -6255,7 +6306,11 @@ LWReturnCode LWSetTimeout(LWDeviceHandle handle, uint32_t t)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	ljhNS::gGlobal.numDeviceMap[handle]->timeout = t;
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	ljhNS::gGlobal.numDeviceMap[handle].devHandle->timeout = t;
 
 	return LW_RETURN_OK;
 }
@@ -6266,7 +6321,11 @@ LWReturnCode LWSetTriggerMode(LWDeviceHandle handle, LWTriggerMode mode)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetTriggerMode(mode);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTriggerMode(mode);
 }
 
 LWReturnCode LWGetTriggerMode(LWDeviceHandle handle, LWTriggerMode* mode)
@@ -6275,7 +6334,11 @@ LWReturnCode LWGetTriggerMode(LWDeviceHandle handle, LWTriggerMode* mode)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetTriggerMode(*mode);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetTriggerMode(*mode);
 }
 
 LWReturnCode LWSetExposureMode(LWDeviceHandle handle, LWSensorType sensorType, LWExposureMode mode)
@@ -6284,7 +6347,11 @@ LWReturnCode LWSetExposureMode(LWDeviceHandle handle, LWSensorType sensorType, L
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetExposureMode(sensorType, mode);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetExposureMode(sensorType, mode);
 }
 
 LWReturnCode LWGetExposureMode(LWDeviceHandle handle, LWSensorType sensorType, LWExposureMode* mode)
@@ -6293,7 +6360,11 @@ LWReturnCode LWGetExposureMode(LWDeviceHandle handle, LWSensorType sensorType, L
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetExposureMode(sensorType, *mode);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetExposureMode(sensorType, *mode);
 }
 
 LWReturnCode LWSetHDRMode(LWDeviceHandle handle, LWHDRMode mode)
@@ -6302,7 +6373,11 @@ LWReturnCode LWSetHDRMode(LWDeviceHandle handle, LWHDRMode mode)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetHDRMode(mode);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetHDRMode(mode);
 }
 
 LWReturnCode LWGetHDRMode(LWDeviceHandle handle, LWHDRMode* mode)
@@ -6311,7 +6386,11 @@ LWReturnCode LWGetHDRMode(LWDeviceHandle handle, LWHDRMode* mode)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetHDRMode(*mode);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetHDRMode(*mode);
 }
 
 LWReturnCode LWSetTransformDepthToRgbEnable(LWDeviceHandle handle, bool enable)
@@ -6320,7 +6399,11 @@ LWReturnCode LWSetTransformDepthToRgbEnable(LWDeviceHandle handle, bool enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-    return ljhNS::gGlobal.numDeviceMap[handle]->SetTransformDepthToRgbEnable(enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTransformDepthToRgbEnable(enable);
 }
 
 LWReturnCode LWSetTransformRgbToDepthEnable(LWDeviceHandle handle, bool enable)
@@ -6329,7 +6412,11 @@ LWReturnCode LWSetTransformRgbToDepthEnable(LWDeviceHandle handle, bool enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-    return ljhNS::gGlobal.numDeviceMap[handle]->SetTransformRgbToDepthEnable(enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTransformRgbToDepthEnable(enable);
 }
 
 LWReturnCode LWSetFrameRate(LWDeviceHandle handle, int32_t value)
@@ -6338,7 +6425,11 @@ LWReturnCode LWSetFrameRate(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetFrameRate(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetFrameRate(value);
 }
 
 LWReturnCode LWGetFrameRate(LWDeviceHandle handle, int32_t* value)
@@ -6347,7 +6438,11 @@ LWReturnCode LWGetFrameRate(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetFrameRate(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetFrameRate(*value);
 }
 
 LWReturnCode LWSetExposureTime(LWDeviceHandle handle, LWSensorType sensorType, const int32_t* exposureTimeArray, int32_t arraySize)
@@ -6356,7 +6451,11 @@ LWReturnCode LWSetExposureTime(LWDeviceHandle handle, LWSensorType sensorType, c
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetExposureTime(sensorType, exposureTimeArray, arraySize);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetExposureTime(sensorType, exposureTimeArray, arraySize);
 }
 
 LWReturnCode LWGetExposureTime(LWDeviceHandle handle, LWSensorType sensorType, int32_t* exposureTimeArray, int32_t arraySize, int32_t* filledCount)
@@ -6365,7 +6464,11 @@ LWReturnCode LWGetExposureTime(LWDeviceHandle handle, LWSensorType sensorType, i
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetExposureTime(sensorType, exposureTimeArray, arraySize, *filledCount);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetExposureTime(sensorType, exposureTimeArray, arraySize, *filledCount);
 }
 
 LWReturnCode LWSetTimeFilterParams(LWDeviceHandle handle, LWFilterParam param)
@@ -6374,7 +6477,11 @@ LWReturnCode LWSetTimeFilterParams(LWDeviceHandle handle, LWFilterParam param)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetTimeFilterParams(param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTimeFilterParams(param);
 }
 
 LWReturnCode LWGetTimeFilterParams(LWDeviceHandle handle, LWFilterParam* param)
@@ -6383,7 +6490,11 @@ LWReturnCode LWGetTimeFilterParams(LWDeviceHandle handle, LWFilterParam* param)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetTimeFilterParams(*param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetTimeFilterParams(*param);
 }
 
 LWReturnCode LWSetTimeMedianFilterParams(LWDeviceHandle handle, LWFilterParam param)
@@ -6392,7 +6503,11 @@ LWReturnCode LWSetTimeMedianFilterParams(LWDeviceHandle handle, LWFilterParam pa
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetTimeMedianFilterParams(param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTimeMedianFilterParams(param);
 }
 
 LWReturnCode LWGetTimeMedianFilterParams(LWDeviceHandle handle, LWFilterParam* param)
@@ -6401,7 +6516,11 @@ LWReturnCode LWGetTimeMedianFilterParams(LWDeviceHandle handle, LWFilterParam* p
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetTimeMedianFilterParams(*param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetTimeMedianFilterParams(*param);
 }
 
 LWReturnCode LWSetSpatialFilterParams(LWDeviceHandle handle, LWFilterParam param)
@@ -6410,7 +6529,11 @@ LWReturnCode LWSetSpatialFilterParams(LWDeviceHandle handle, LWFilterParam param
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetSpatialFilterParams(param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetSpatialFilterParams(param);
 }
 
 LWReturnCode LWGetSpatialFilterParams(LWDeviceHandle handle, LWFilterParam* param)
@@ -6419,7 +6542,11 @@ LWReturnCode LWGetSpatialFilterParams(LWDeviceHandle handle, LWFilterParam* para
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetSpatialFilterParams(*param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetSpatialFilterParams(*param);
 }
 
 LWReturnCode LWSetFlyingPixelsFilterParams(LWDeviceHandle handle, LWFilterParam param)
@@ -6428,7 +6555,11 @@ LWReturnCode LWSetFlyingPixelsFilterParams(LWDeviceHandle handle, LWFilterParam 
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetFlyingPixelsFilterParams(param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetFlyingPixelsFilterParams(param);
 }
 
 LWReturnCode LWGetFlyingPixelsFilterParams(LWDeviceHandle handle, LWFilterParam* param)
@@ -6437,7 +6568,11 @@ LWReturnCode LWGetFlyingPixelsFilterParams(LWDeviceHandle handle, LWFilterParam*
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetFlyingPixelsFilterParams(*param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetFlyingPixelsFilterParams(*param);
 }
 
 LWReturnCode LWSetConfidenceFilterParams(LWDeviceHandle handle, LWFilterParam param)
@@ -6446,7 +6581,11 @@ LWReturnCode LWSetConfidenceFilterParams(LWDeviceHandle handle, LWFilterParam pa
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetConfidenceFilterParams(param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetConfidenceFilterParams(param);
 }
 
 LWReturnCode LWGetConfidenceFilterParams(LWDeviceHandle handle, LWFilterParam* param)
@@ -6455,7 +6594,11 @@ LWReturnCode LWGetConfidenceFilterParams(LWDeviceHandle handle, LWFilterParam* p
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetConfidenceFilterParams(*param);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetConfidenceFilterParams(*param);
 }
 
 LWReturnCode LWSetIRGMMGain(LWDeviceHandle handle, int32_t value)
@@ -6464,7 +6607,11 @@ LWReturnCode LWSetIRGMMGain(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetIRGMMGain(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetIRGMMGain(value);
 }
 
 LWReturnCode LWGetIRGMMGain(LWDeviceHandle handle, int32_t* value)
@@ -6473,7 +6620,11 @@ LWReturnCode LWGetIRGMMGain(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetIRGMMGain(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetIRGMMGain(*value);
 }
 
 LWReturnCode LWSetRgbSensorGain(LWDeviceHandle handle, int32_t value)
@@ -6482,7 +6633,11 @@ LWReturnCode LWSetRgbSensorGain(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetRgbSensorGain(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetRgbSensorGain(value);
 }
 
 LWReturnCode LWGetRgbSensorGain(LWDeviceHandle handle, int32_t* value)
@@ -6491,7 +6646,11 @@ LWReturnCode LWGetRgbSensorGain(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetRgbSensorGain(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetRgbSensorGain(*value);
 }
 
 LWReturnCode LWSetRgbSensorGamma(LWDeviceHandle handle, int32_t value)
@@ -6500,7 +6659,11 @@ LWReturnCode LWSetRgbSensorGamma(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetRgbSensorGamma(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetRgbSensorGamma(value);
 }
 
 LWReturnCode LWGetRgbSensorGamma(LWDeviceHandle handle, int32_t* value)
@@ -6509,7 +6672,11 @@ LWReturnCode LWGetRgbSensorGamma(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetRgbSensorGamma(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetRgbSensorGamma(*value);
 }
 
 LWReturnCode LWSetRgbSensorBrightness(LWDeviceHandle handle, int32_t value)
@@ -6518,7 +6685,11 @@ LWReturnCode LWSetRgbSensorBrightness(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetRgbSensorBrightness(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetRgbSensorBrightness(value);
 }
 
 LWReturnCode LWGetRgbSensorBrightness(LWDeviceHandle handle, int32_t* value)
@@ -6527,7 +6698,11 @@ LWReturnCode LWGetRgbSensorBrightness(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetRgbSensorBrightness(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetRgbSensorBrightness(*value);
 }
 
 LWReturnCode LWSetRgbSensorContrastRatio(LWDeviceHandle handle, int32_t value)
@@ -6536,7 +6711,11 @@ LWReturnCode LWSetRgbSensorContrastRatio(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetRgbSensorContrastRatio(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetRgbSensorContrastRatio(value);
 }
 
 LWReturnCode LWGetRgbSensorContrastRatio(LWDeviceHandle handle, int32_t* value)
@@ -6545,7 +6724,11 @@ LWReturnCode LWGetRgbSensorContrastRatio(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetRgbSensorContrastRatio(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetRgbSensorContrastRatio(*value);
 }
 
 LWReturnCode LWSetRgbSensorSaturation(LWDeviceHandle handle, int32_t value)
@@ -6554,7 +6737,11 @@ LWReturnCode LWSetRgbSensorSaturation(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetRgbSensorSaturation(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetRgbSensorSaturation(value);
 }
 
 LWReturnCode LWGetRgbSensorSaturation(LWDeviceHandle handle, int32_t* value)
@@ -6563,7 +6750,11 @@ LWReturnCode LWGetRgbSensorSaturation(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetRgbSensorSaturation(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetRgbSensorSaturation(*value);
 }
 
 LWReturnCode LWSetRgbSensorWhiteBalance(LWDeviceHandle handle, int32_t value)
@@ -6572,7 +6763,11 @@ LWReturnCode LWSetRgbSensorWhiteBalance(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetRgbSensorWhiteBalance(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetRgbSensorWhiteBalance(value);
 }
 
 LWReturnCode LWGetRgbSensorWhiteBalance(LWDeviceHandle handle, int32_t* value)
@@ -6581,7 +6776,11 @@ LWReturnCode LWGetRgbSensorWhiteBalance(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetRgbSensorWhiteBalance(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetRgbSensorWhiteBalance(*value);
 }
 
 LWReturnCode LWSetNetworkInfo(LWDeviceHandle handle, LWNetworkInfo info)
@@ -6590,7 +6789,11 @@ LWReturnCode LWSetNetworkInfo(LWDeviceHandle handle, LWNetworkInfo info)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetNetworkInfo(info);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetNetworkInfo(info);
 }
 
 LWReturnCode LWGetNetworkInfo(LWDeviceHandle handle, LWNetworkInfo* info)
@@ -6599,7 +6802,11 @@ LWReturnCode LWGetNetworkInfo(LWDeviceHandle handle, LWNetworkInfo* info)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetNetworkInfo(*info);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetNetworkInfo(*info);
 }
 
 LWReturnCode LWSetDeviceNumber(LWDeviceHandle handle, int32_t value)
@@ -6608,7 +6815,11 @@ LWReturnCode LWSetDeviceNumber(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetDeviceNumber(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetDeviceNumber(value);
 }
 
 LWReturnCode LWGetDeviceNumber(LWDeviceHandle handle, int32_t* value)
@@ -6617,7 +6828,11 @@ LWReturnCode LWGetDeviceNumber(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetDeviceNumber(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetDeviceNumber(*value);
 }
 
 LWReturnCode LWSetDepthCompensateValue(LWDeviceHandle handle, int32_t value)
@@ -6626,7 +6841,11 @@ LWReturnCode LWSetDepthCompensateValue(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetDepthCompensateValue(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetDepthCompensateValue(value);
 }
 
 LWReturnCode LWGetDepthCompensateValue(LWDeviceHandle handle, int32_t* value)
@@ -6635,7 +6854,11 @@ LWReturnCode LWGetDepthCompensateValue(LWDeviceHandle handle, int32_t* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetDepthCompensateValue(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetDepthCompensateValue(*value);
 }
 
 LWReturnCode LWSetHardTriggerFilterParams(LWDeviceHandle handle, int32_t t1, int32_t t2)
@@ -6644,7 +6867,11 @@ LWReturnCode LWSetHardTriggerFilterParams(LWDeviceHandle handle, int32_t t1, int
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetHardTriggerFilterParams(t1, t2);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetHardTriggerFilterParams(t1, t2);
 }
 
 LWReturnCode LWGetHardTriggerFilterParams(LWDeviceHandle handle, int32_t* t1, int32_t* t2)
@@ -6653,7 +6880,11 @@ LWReturnCode LWGetHardTriggerFilterParams(LWDeviceHandle handle, int32_t* t1, in
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetHardTriggerFilterParams(*t1, *t2);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetHardTriggerFilterParams(*t1, *t2);
 }
 
 LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height)
@@ -6662,7 +6893,11 @@ LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetResolution(sensorType, width, height);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetResolution(sensorType, width, height);
 }
 
 LWReturnCode LWGetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t* width, int32_t* height)
@@ -6671,7 +6906,11 @@ LWReturnCode LWGetResolution(LWDeviceHandle handle, LWSensorType sensorType, int
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetResolution(sensorType, *width, *height);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetResolution(sensorType, *width, *height);
 }
 
 LWReturnCode LWGetIntrinsicParam(LWDeviceHandle handle, LWSensorType sensorType, LWSensorIntrinsicParam* intrinsicParam)
@@ -6680,7 +6919,11 @@ LWReturnCode LWGetIntrinsicParam(LWDeviceHandle handle, LWSensorType sensorType,
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetIntrinsicParam(sensorType, *intrinsicParam);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetIntrinsicParam(sensorType, *intrinsicParam);
 }
 
 LWReturnCode LWGetExtrinsicParam(LWDeviceHandle handle, LWSensorType sensorType, LWSensorExtrinsicParam* extrinsicParam)
@@ -6689,7 +6932,11 @@ LWReturnCode LWGetExtrinsicParam(LWDeviceHandle handle, LWSensorType sensorType,
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetExtrinsicParam(sensorType, *extrinsicParam);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetExtrinsicParam(sensorType, *extrinsicParam);
 }
 
 LWReturnCode LWGetIMUExtrinsicParam(LWDeviceHandle handle, LWIMUExtrinsicParam* para)
@@ -6698,7 +6945,11 @@ LWReturnCode LWGetIMUExtrinsicParam(LWDeviceHandle handle, LWIMUExtrinsicParam* 
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetIMUExtrinsicParam(*para);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetIMUExtrinsicParam(*para);
 }
 
 LWReturnCode LWGetIMUData(LWDeviceHandle handle, LWIMUData* imu_data)
@@ -6707,7 +6958,11 @@ LWReturnCode LWGetIMUData(LWDeviceHandle handle, LWIMUData* imu_data)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetIMUData(*imu_data);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetIMUData(*imu_data);
 }
 
 LWReturnCode LWSetIMUFrequency(LWDeviceHandle handle, int32_t value)
@@ -6716,7 +6971,11 @@ LWReturnCode LWSetIMUFrequency(LWDeviceHandle handle, int32_t value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetIMUFrequency(value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetIMUFrequency(value);
 }
 
 LWReturnCode LWGetDeviceSN(LWDeviceHandle handle, char* _SN_, int32_t bufferLen)
@@ -6725,7 +6984,11 @@ LWReturnCode LWGetDeviceSN(LWDeviceHandle handle, char* _SN_, int32_t bufferLen)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetDeviceSN(_SN_, bufferLen);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetDeviceSN(_SN_, bufferLen);
 }
 
 LWReturnCode LWGetDeviceType(LWDeviceHandle handle, char* type, int32_t bufferLen)
@@ -6734,7 +6997,11 @@ LWReturnCode LWGetDeviceType(LWDeviceHandle handle, char* type, int32_t bufferLe
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetDeviceType(type, bufferLen);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetDeviceType(type, bufferLen);
 }
 
 LWReturnCode LWGetTimeStamp(LWDeviceHandle handle, LWTimeStamp* t)
@@ -6743,7 +7010,11 @@ LWReturnCode LWGetTimeStamp(LWDeviceHandle handle, LWTimeStamp* t)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetTimeStamp(*t);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetTimeStamp(*t);
 }
 
 LWReturnCode LWGetLibVersion(LWVersionInfo *version)
@@ -6766,7 +7037,11 @@ LWReturnCode LWGetDeviceVersion(LWDeviceHandle handle, LWVersionInfo* fv, LWVers
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetDeviceVersion(*fv, *dv);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetDeviceVersion(*fv, *dv);
 }
 
 LWReturnCode LWRegisterNetworkMonitoringCallback(void(*pCallback)(LWDeviceHandle handle, const char* error, void* pUserData), void* pUserData)
@@ -6894,6 +7169,14 @@ const char *LWGetReturnCodeDescriptor(LWReturnCode code)
 	case LW_RETURN_DEVICE_IP_CONFLICT:
 		ljhNS::gGlobal.errorInfo = "Detected that the connected devices have the same IP, resulting in inability to access devices with IP conflicts. Each device's IP must be set to be unique.";
 		break;
+	
+	case LW_RETURN_DEVICE_OCCUPIED:
+		ljhNS::gGlobal.errorInfo = "The device is already occupied (the device has been opened by another device descriptor)."; 
+		break;
+
+	case LW_RETURN_HANDLE_EXPIRE:
+		ljhNS::gGlobal.errorInfo = "The device descriptor has expired and needs to be searched for again.";
+		break;
 
 	case LW_RETURN_THREAD_QUIT_TIMEOUT:
 		ljhNS::gGlobal.errorInfo = "Thread exit timeout.";
@@ -6980,7 +7263,11 @@ LWReturnCode LWGetFrameReady(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-    return ljhNS::gGlobal.numDeviceMap[handle]->GetFrameReady();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetFrameReady();
 }
 
 LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType type)
@@ -6989,117 +7276,117 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	if (!ljhNS::gGlobal.numDeviceMap[handle]->isReady) return LW_RETURN_DATA_NOT_UPDATED;
+	if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->isReady) return LW_RETURN_DATA_NOT_UPDATED;
 
 	switch (type)
 	{
 	case LW_DEPTH_FRAME:
 	{
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->depthEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
-		if(ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_POINTCLOUD_DEPTH_IR_RTY)
-			memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pDepth.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2);
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->depthEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
+		if(ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_POINTCLOUD_DEPTH_IR_RTY)
+			memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pDepth.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2);
 		else
-			memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pDepth.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data()+ ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 12, ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2);
+			memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pDepth.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data()+ ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 12, ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2);
 
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->tofWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->tofHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofHeight;
 		frame->frameType	= type;
 		frame->elemSize		= 2;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels;
 		frame->pixelFormat	= LW_PIXEL_FORMAT_USHORT;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->serial;
-		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2;
-		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle]->pDepth.data();
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->time;
-		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->temperature;
-		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->variant;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->serial;
+		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2;
+		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->pDepth.data();
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->time;
+		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->temperature;
+		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->variant;
 
 		return LW_RETURN_OK;
 	}
 
 	case LW_AMPLITUDE_FRAME:
 	{
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->ampEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
-		memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pAmp.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2, ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2);
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->ampEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
+		memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pAmp.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2, ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2);
 
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->tofWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->tofHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofHeight;
 		frame->frameType	= type;
 		frame->elemSize		= 2;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels;
 		frame->pixelFormat	= LW_PIXEL_FORMAT_USHORT;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->serial;
-		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2;
-		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle]->pAmp.data();
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->time;
-		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->temperature;
-		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->variant;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->serial;
+		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2;
+		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->pAmp.data();
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->time;
+		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->temperature;
+		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->variant;
 
 		return LW_RETURN_OK;
 	}
 
 	case LW_IR_FRAME:
 	{
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->irEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->irEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
 
-		if(ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType == LW_IR_RTY)
-			memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle]->tofPixels);
-		else if ((ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType == LW_DEPTH_IR_RTY) || (ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType == LW_DEPTH_IR_RGB_RTY))
-			memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2, ljhNS::gGlobal.numDeviceMap[handle]->tofPixels);
-		else if (ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType == LW_POINTCLOUD_IR_RTY)
-			memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 12, ljhNS::gGlobal.numDeviceMap[handle]->tofPixels);
-		else if (ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType == LW_POINTCLOUD_DEPTH_IR_RTY)
-			memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 14, ljhNS::gGlobal.numDeviceMap[handle]->tofPixels);
+		if(ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType == LW_IR_RTY)
+			memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels);
+		else if ((ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType == LW_DEPTH_IR_RTY) || (ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType == LW_DEPTH_IR_RGB_RTY))
+			memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2, ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels);
+		else if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType == LW_POINTCLOUD_IR_RTY)
+			memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 12, ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels);
+		else if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType == LW_POINTCLOUD_DEPTH_IR_RTY)
+			memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pGra.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 14, ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels);
 		else
 		{
-			auto amp_ptr	= (uint16_t*)(ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 2);
-			auto gra_ptr	= (uint8_t*)ljhNS::gGlobal.numDeviceMap[handle]->pGra.data();
-			auto threshold	= ljhNS::gGlobal.numDeviceMap[handle]->irGMMGain;
-			for (uint32_t i = 0, val; i < ljhNS::gGlobal.numDeviceMap[handle]->tofPixels; ++i, ++amp_ptr, ++gra_ptr)
+			auto amp_ptr	= (uint16_t*)(ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data() + ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 2);
+			auto gra_ptr	= (uint8_t*)ljhNS::gGlobal.numDeviceMap[handle].devHandle->pGra.data();
+			auto threshold	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->irGMMGain;
+			for (uint32_t i = 0, val; i < ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels; ++i, ++amp_ptr, ++gra_ptr)
 			{
 				val = (int)(*amp_ptr / 128.0 * threshold);
 				*gra_ptr = (val < 255) ? val : 255;
 			}
 		}
 
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->tofWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->tofHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofHeight;
 		frame->frameType	= type;
 		frame->elemSize		= 1;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels;
 		frame->pixelFormat	= LW_PIXEL_FORMAT_UCHAR;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->serial;
-		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels;
-		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle]->pGra.data();
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->time;
-		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->temperature;
-		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->variant;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->serial;
+		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels;
+		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->pGra.data();
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->time;
+		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->temperature;
+		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->variant;
 
 		return LW_RETURN_OK;
 	}
 
 	case LW_POINTCLOUD_FRAME:
 	{
-		if ((ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType == LW_POINTCLOUD_IR_RTY)
-			|| (ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType == LW_POINTCLOUD_DEPTH_IR_RTY))
+		if ((ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType == LW_POINTCLOUD_IR_RTY)
+			|| (ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType == LW_POINTCLOUD_DEPTH_IR_RTY))
 		{
-			memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pPot.data(), ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 12);
+			memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pPot.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 12);
 		}
-		else if (ljhNS::gGlobal.numDeviceMap[handle]->depthEnable)
+		else if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->depthEnable)
 		{
-			auto dis_ptr = (uint16_t*)(ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->data());
-			auto pot_ptr = (LWVector3f*)(ljhNS::gGlobal.numDeviceMap[handle]->pPot.data());
-			auto col = -ljhNS::gGlobal.numDeviceMap[handle]->tofInArg.cx;
-			auto row = -ljhNS::gGlobal.numDeviceMap[handle]->tofInArg.cy;
-			for (uint32_t i = 0; i < ljhNS::gGlobal.numDeviceMap[handle]->tofHeight; ++i)
+			auto dis_ptr = (uint16_t*)(ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->data());
+			auto pot_ptr = (LWVector3f*)(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pPot.data());
+			auto col = -ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofInArg.cx;
+			auto row = -ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofInArg.cy;
+			for (uint32_t i = 0; i < ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofHeight; ++i)
 			{
-				col = -ljhNS::gGlobal.numDeviceMap[handle]->tofInArg.cx;
-				for (uint32_t j = 0; j < ljhNS::gGlobal.numDeviceMap[handle]->tofWidth; ++j, ++pot_ptr, ++dis_ptr)
+				col = -ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofInArg.cx;
+				for (uint32_t j = 0; j < ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofWidth; ++j, ++pot_ptr, ++dis_ptr)
 				{
 					if (*dis_ptr < PCD_MAX_VALUE)
 					{
-						pot_ptr->x = col / ljhNS::gGlobal.numDeviceMap[handle]->tofInArg.fx * float(*dis_ptr);
-						pot_ptr->y = row / ljhNS::gGlobal.numDeviceMap[handle]->tofInArg.fy * float(*dis_ptr);
+						pot_ptr->x = col / ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofInArg.fx * float(*dis_ptr);
+						pot_ptr->y = row / ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofInArg.fy * float(*dis_ptr);
 						pot_ptr->z = *dis_ptr;
 					}
 					else
@@ -7118,46 +7405,46 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 			return LW_RETURN_DATA_TYPE_MISMATCH;
 		}
 
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->tofWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->tofHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofHeight;
 		frame->frameType	= type;
 		frame->elemSize		= 12;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels;
 		frame->pixelFormat	= LW_PIXEL_FORMAT_VECTOR3F;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->serial;
-		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 12;
-		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle]->pPot.data();
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->time;
-		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->temperature;
-		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->variant;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->serial;
+		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 12;
+		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->pPot.data();
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->time;
+		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->temperature;
+		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->variant;
 
-		frame->pVariant->IMUModule.calMode	= ljhNS::gGlobal.numDeviceMap[handle]->cal_mode;
-		frame->pVariant->IMUModule.eParam	= ljhNS::gGlobal.numDeviceMap[handle]->imuOutArg;
+		frame->pVariant->IMUModule.calMode	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->cal_mode;
+		frame->pVariant->IMUModule.eParam	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->imuOutArg;
 
 		return LW_RETURN_OK;
 	}
 
 	case LW_RGB_FRAME:
 	{
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->hasRgbModule.load())
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->hasRgbModule.load())
 		{
 			ljhNS::gGlobal.errorInfo = "This device does not have an RGB module and cannot obtain RGB image data.";
 			return LW_RETURN_CUSTOM_ERROR;
 		}
 
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->rgbEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
-		memcpy(ljhNS::gGlobal.numDeviceMap[handle]->pRgb.data(), ljhNS::gGlobal.numDeviceMap[handle]->rgbCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle]->rgbCutNode->size);
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbEnable) return LW_RETURN_DATA_TYPE_MISMATCH;
+		memcpy(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pRgb.data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbCutNode->data(), ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbCutNode->size);
 
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->rgbWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->rgbHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbHeight;
 		frame->frameType	= type;
 		frame->elemSize		= 3;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->rgbPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbPixels;
 		frame->pixelFormat	= LW_PIXEL_FORMAT_RGB888;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->rgbCutNode->serial;
-		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle]->rgbCutNode->size;
-		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle]->pRgb.data();
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->rgbCutNode->time;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbCutNode->serial;
+		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbCutNode->size;
+		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->pRgb.data();
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbCutNode->time;
 		frame->temperature	= {};
 		frame->pVariant		= nullptr;
 
@@ -7166,33 +7453,33 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 
 	case LW_RGB_TO_DEPTH_FRAME:
 	{
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->hasRgbModule.load())
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->hasRgbModule.load())
 		{
 			ljhNS::gGlobal.errorInfo = "This device does not have an RGB module and cannot obtain data of this type.";
 			return LW_RETURN_CUSTOM_ERROR;
 		}
 
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->isR2DEnable.load())
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->isR2DEnable.load())
 		{
 			ljhNS::gGlobal.errorInfo = "The transform function from rgb to depth data must be enabled. Namely: LWSetTransformRgbToDepthEnable(true).";
 			return LW_RETURN_CUSTOM_ERROR;
 		}
 
-		if (ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_RGB_RTY
-			&& ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_AMPLITUDE_RGB_RTY
+		if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_RGB_RTY
+			&& ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_AMPLITUDE_RGB_RTY
 			)
 			return LW_RETURN_DATA_TYPE_MISMATCH;
 
 		if (ljhNS::gGlobal.r2dTF)
 		{
-			std::unique_lock<std::mutex> lock{ ljhNS::gGlobal.numDeviceMap[handle]->r2dMutex };
-			ljhNS::gGlobal.numDeviceMap[handle]->pR2D.memset_v(0);
-			ljhNS::gGlobal.numDeviceMap[handle]->r2dRunCount = THREAD_POOL_SIZE;
-			ljhNS::gGlobal.numDeviceMap[handle]->r2dFlag = 0xFFFFFFFF;
-			ljhNS::gGlobal.numDeviceMap[handle]->r2dNotify.notify_all();
-			if (!ljhNS::gGlobal.numDeviceMap[handle]->r2dNotify.wait_for(lock, 
-				std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle]->timeout }, 
-				[handle] { return (ljhNS::gGlobal.numDeviceMap[handle]->r2dRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
+			std::unique_lock<std::mutex> lock{ ljhNS::gGlobal.numDeviceMap[handle].devHandle->r2dMutex };
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->pR2D.memset_v(0);
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->r2dRunCount = THREAD_POOL_SIZE;
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->r2dFlag = 0xFFFFFFFF;
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->r2dNotify.notify_all();
+			if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->r2dNotify.wait_for(lock,
+				std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle].devHandle->timeout },
+				[handle] { return (ljhNS::gGlobal.numDeviceMap[handle].devHandle->r2dRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
 			{
 				return LW_RETURN_TIMEOUT;
 			}
@@ -7201,16 +7488,16 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 			ljhNS::gGlobal.r2dTF = false;
 		}
 		
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->tofWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->tofHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofHeight;
 		frame->frameType	= type;
 		frame->elemSize		= 3;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels;
 		frame->pixelFormat	= LW_PIXEL_FORMAT_RGB888;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->rgbCutNode->serial;
-		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle]->tofPixels * 3;
-		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle]->pR2D.data();
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->rgbCutNode->time;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbCutNode->serial;
+		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofPixels * 3;
+		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->pR2D.data();
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbCutNode->time;
 		frame->temperature	= {};
 		frame->pVariant		= nullptr;
 
@@ -7220,38 +7507,38 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 	case LW_DEPTH_TO_RGB_FRAME:
 	case LW_IR_TO_RGB_FRAME:
 	{
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->hasRgbModule.load())
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->hasRgbModule.load())
 		{
 			ljhNS::gGlobal.errorInfo = "This device does not have an RGB module and cannot obtain data of this type.";
 			return LW_RETURN_CUSTOM_ERROR;
 		}
 
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->isD2REnable.load())
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->isD2REnable.load())
 		{
 			ljhNS::gGlobal.errorInfo = "The transform function from depth to rgb data must be enabled. Namely: LWSetTransformDepthToRgbEnable(true).";
 			return LW_RETURN_CUSTOM_ERROR;
 		}
 
-		if ((type & LW_IR_TO_RGB_FRAME) && (ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_IR_RGB_RTY)) return LW_RETURN_DATA_TYPE_MISMATCH;
+		if ((type & LW_IR_TO_RGB_FRAME) && (ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_IR_RGB_RTY)) return LW_RETURN_DATA_TYPE_MISMATCH;
 		if ((type & LW_DEPTH_TO_RGB_FRAME) 
-			&& ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_RGB_RTY
-			&& ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_IR_RGB_RTY
-			&& ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_AMPLITUDE_RGB_RTY
+			&& ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_RGB_RTY
+			&& ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_IR_RGB_RTY
+			&& ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_AMPLITUDE_RGB_RTY
 			)
 			return LW_RETURN_DATA_TYPE_MISMATCH;
 
 		if (ljhNS::gGlobal.d2rTF)
 		{
-			std::unique_lock<std::mutex> lock{ ljhNS::gGlobal.numDeviceMap[handle]->d2rMutex };
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rInputImg.setTo(0);
-			ljhNS::gGlobal.numDeviceMap[handle]->ir2rInputImg.setTo(0);
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rRunCount = THREAD_POOL_SIZE;
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rFlag = 0xFFFFFFFF;
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rNotify.notify_all();
-			if(!ljhNS::gGlobal.numDeviceMap[handle]->d2rNotify.wait_for(
+			std::unique_lock<std::mutex> lock{ ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rMutex };
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rInputImg.setTo(0);
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->ir2rInputImg.setTo(0);
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rRunCount = THREAD_POOL_SIZE;
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rFlag = 0xFFFFFFFF;
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rNotify.notify_all();
+			if(!ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rNotify.wait_for(
 				lock, 
-				std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle]->timeout }, 
-				[handle] { return (ljhNS::gGlobal.numDeviceMap[handle]->d2rRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
+				std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle].devHandle->timeout },
+				[handle] { return (ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
 			{
 				return LW_RETURN_TIMEOUT;
 			}
@@ -7260,51 +7547,51 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 			ljhNS::gGlobal.d2rTF = false;
 		}
 
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->rgbWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->rgbHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbHeight;
 		frame->frameType	= type;
 		frame->elemSize		= (type & LW_DEPTH_TO_RGB_FRAME) ? 2 : 1;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->rgbPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbPixels;
 		frame->pixelFormat	= (type & LW_DEPTH_TO_RGB_FRAME) ? LW_PIXEL_FORMAT_USHORT : LW_PIXEL_FORMAT_UCHAR;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->serial;
-		frame->bufferSize	= (type & LW_DEPTH_TO_RGB_FRAME) ? ljhNS::gGlobal.numDeviceMap[handle]->rgbPixels * 2 : ljhNS::gGlobal.numDeviceMap[handle]->rgbPixels;
-		frame->pFrameData	= (type & LW_DEPTH_TO_RGB_FRAME) ? (char*)ljhNS::gGlobal.numDeviceMap[handle]->d2rOutputImg.data : (char*)ljhNS::gGlobal.numDeviceMap[handle]->ir2rOutputImg.data;
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->time;
-		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->temperature;
-		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->variant;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->serial;
+		frame->bufferSize	= (type & LW_DEPTH_TO_RGB_FRAME) ? ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbPixels * 2 : ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbPixels;
+		frame->pFrameData	= (type & LW_DEPTH_TO_RGB_FRAME) ? (char*)ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rOutputImg.data : (char*)ljhNS::gGlobal.numDeviceMap[handle].devHandle->ir2rOutputImg.data;
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->time;
+		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->temperature;
+		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->variant;
 
 		return LW_RETURN_OK;
 	}
 
 	case LW_D2R_POINTCLOUD_FRAME:
 	{
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->hasRgbModule.load())
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->hasRgbModule.load())
 		{
 			ljhNS::gGlobal.errorInfo = "This device does not have an RGB module and cannot obtain data of this type.";
 			return LW_RETURN_CUSTOM_ERROR;
 		}
 
-		if (!ljhNS::gGlobal.numDeviceMap[handle]->isD2REnable.load())
+		if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->isD2REnable.load())
 		{
 			ljhNS::gGlobal.errorInfo = "The transform function from depth to rgb data must be enabled. Namely: LWSetTransformDepthToRgbEnable(true).";
 			return LW_RETURN_CUSTOM_ERROR;
 		}
 
-		if (ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_RGB_RTY
-			&& ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_IR_RGB_RTY
-			&& ljhNS::gGlobal.numDeviceMap[handle]->dataRecvType != LW_DEPTH_AMPLITUDE_RGB_RTY
+		if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_RGB_RTY
+			&& ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_IR_RGB_RTY
+			&& ljhNS::gGlobal.numDeviceMap[handle].devHandle->dataRecvType != LW_DEPTH_AMPLITUDE_RGB_RTY
 			) 
 			return LW_RETURN_DATA_TYPE_MISMATCH;
 
 		if (ljhNS::gGlobal.d2rTF) 
 		{
-			std::unique_lock<std::mutex> lock{ ljhNS::gGlobal.numDeviceMap[handle]->d2rMutex };
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rInputImg.setTo(0);
-			ljhNS::gGlobal.numDeviceMap[handle]->ir2rInputImg.setTo(0);
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rRunCount = THREAD_POOL_SIZE;
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rFlag = 0xFFFFFFFF;
-			ljhNS::gGlobal.numDeviceMap[handle]->d2rNotify.notify_all();
-			if (!ljhNS::gGlobal.numDeviceMap[handle]->d2rNotify.wait_for(lock, std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle]->timeout }, [handle] { return (ljhNS::gGlobal.numDeviceMap[handle]->d2rRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
+			std::unique_lock<std::mutex> lock{ ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rMutex };
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rInputImg.setTo(0);
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->ir2rInputImg.setTo(0);
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rRunCount = THREAD_POOL_SIZE;
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rFlag = 0xFFFFFFFF;
+			ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rNotify.notify_all();
+			if (!ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rNotify.wait_for(lock, std::chrono::milliseconds{ ljhNS::gGlobal.numDeviceMap[handle].devHandle->timeout }, [handle] { return (ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rRunCount == 0) || !ljhNS::gGlobal.initEnable.load(); }))
 			{
 				return LW_RETURN_TIMEOUT;
 			}
@@ -7313,19 +7600,19 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 			ljhNS::gGlobal.d2rTF = false;
 		}
 
-		auto dis_ptr = (uint16_t*)(ljhNS::gGlobal.numDeviceMap[handle]->d2rOutputImg.data);
-		auto pot_ptr = (LWVector3f*)(ljhNS::gGlobal.numDeviceMap[handle]->pTPot.data());
-		auto col = -ljhNS::gGlobal.numDeviceMap[handle]->rgbInArg.cx;
-		auto row = -ljhNS::gGlobal.numDeviceMap[handle]->rgbInArg.cy;
-		for (uint32_t i = 0; i < ljhNS::gGlobal.numDeviceMap[handle]->rgbHeight; ++i)
+		auto dis_ptr = (uint16_t*)(ljhNS::gGlobal.numDeviceMap[handle].devHandle->d2rOutputImg.data);
+		auto pot_ptr = (LWVector3f*)(ljhNS::gGlobal.numDeviceMap[handle].devHandle->pTPot.data());
+		auto col = -ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbInArg.cx;
+		auto row = -ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbInArg.cy;
+		for (uint32_t i = 0; i < ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbHeight; ++i)
 		{
-			col = -ljhNS::gGlobal.numDeviceMap[handle]->rgbInArg.cx;
-			for (uint32_t j = 0; j < ljhNS::gGlobal.numDeviceMap[handle]->rgbWidth; ++j, ++pot_ptr, ++dis_ptr)
+			col = -ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbInArg.cx;
+			for (uint32_t j = 0; j < ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbWidth; ++j, ++pot_ptr, ++dis_ptr)
 			{
 				if (*dis_ptr < PCD_MAX_VALUE)
 				{
-					pot_ptr->x = col / ljhNS::gGlobal.numDeviceMap[handle]->rgbInArg.fx * float(*dis_ptr);
-					pot_ptr->y = row / ljhNS::gGlobal.numDeviceMap[handle]->rgbInArg.fy * float(*dis_ptr);
+					pot_ptr->x = col / ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbInArg.fx * float(*dis_ptr);
+					pot_ptr->y = row / ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbInArg.fy * float(*dis_ptr);
 					pot_ptr->z = *dis_ptr;
 				}
 				else
@@ -7339,21 +7626,21 @@ LWReturnCode LWGetFrame(LWDeviceHandle handle, LWFrameData *frame, LWFrameType t
 			row += 1.0f;
 		}
 
-		frame->width		= ljhNS::gGlobal.numDeviceMap[handle]->rgbWidth;
-		frame->height		= ljhNS::gGlobal.numDeviceMap[handle]->rgbHeight;
+		frame->width		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbWidth;
+		frame->height		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbHeight;
 		frame->frameType	= type;
 		frame->elemSize		= 12;
-		frame->total		= ljhNS::gGlobal.numDeviceMap[handle]->rgbPixels;
+		frame->total		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbPixels;
 		frame->pixelFormat	= LW_PIXEL_FORMAT_VECTOR3F;
-		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->serial;
-		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle]->rgbPixels * 12;
-		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle]->pTPot.data();
-		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->time;
-		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->temperature;
-		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle]->tofCutNode->variant;
+		frame->frameIndex	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->serial;
+		frame->bufferSize	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->rgbPixels * 12;
+		frame->pFrameData	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->pTPot.data();
+		frame->timestamp	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->time;
+		frame->temperature	= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->temperature;
+		frame->pVariant		= ljhNS::gGlobal.numDeviceMap[handle].devHandle->tofCutNode->variant;
 
-		frame->pVariant->IMUModule.calMode = ljhNS::gGlobal.numDeviceMap[handle]->cal_mode;
-		frame->pVariant->IMUModule.eParam = ljhNS::gGlobal.numDeviceMap[handle]->imuOutArg;
+		frame->pVariant->IMUModule.calMode = ljhNS::gGlobal.numDeviceMap[handle].devHandle->cal_mode;
+		frame->pVariant->IMUModule.eParam = ljhNS::gGlobal.numDeviceMap[handle].devHandle->imuOutArg;
 
 		return LW_RETURN_OK;
 	}
@@ -7767,7 +8054,11 @@ LWReturnCode LWUpdateFirmware(LWDeviceHandle handle, const char* filename)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->UpdateFirmware(filename);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->UpdateFirmware(filename);
 }
 
 LWReturnCode LWUpdateFirmware1(const char* ip, const char* filename)
@@ -7801,7 +8092,11 @@ LWReturnCode LWSetOutputDO(LWDeviceHandle handle, int32_t channel, int32_t value
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetOutputDO(channel, value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetOutputDO(channel, value);
 }
 
 LWReturnCode LWGetOutputDO(LWDeviceHandle handle, int32_t channel, int32_t* value)
@@ -7810,7 +8105,11 @@ LWReturnCode LWGetOutputDO(LWDeviceHandle handle, int32_t channel, int32_t* valu
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetOutputDO(channel, *value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetOutputDO(channel, *value);
 }
 
 LWReturnCode LWHasPalletIdentifyModule(LWDeviceHandle handle, bool* value)
@@ -7819,7 +8118,11 @@ LWReturnCode LWHasPalletIdentifyModule(LWDeviceHandle handle, bool* value)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->HasPalletIdentifyModule(*value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->HasPalletIdentifyModule(*value);
 }
 
 LWReturnCode LWUploadRKNNFile(LWDeviceHandle handle, const char* filename)
@@ -7828,7 +8131,11 @@ LWReturnCode LWUploadRKNNFile(LWDeviceHandle handle, const char* filename)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->UploadRKNNFile(filename);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->UploadRKNNFile(filename);
 }
 
 LWReturnCode LWSetPalletConfigureFile(LWDeviceHandle handle, const char* filename)
@@ -7837,7 +8144,11 @@ LWReturnCode LWSetPalletConfigureFile(LWDeviceHandle handle, const char* filenam
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetPalletConfigureFile(filename);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetPalletConfigureFile(filename);
 }
 
 LWReturnCode LWSetPalletConfigureFileFromBuffer(LWDeviceHandle handle, const char* buf, int32_t bufLen)
@@ -7846,7 +8157,11 @@ LWReturnCode LWSetPalletConfigureFileFromBuffer(LWDeviceHandle handle, const cha
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetPalletConfigureFileFromBuffer(buf, bufLen);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetPalletConfigureFileFromBuffer(buf, bufLen);
 }
 
 LWReturnCode LWGetPalletConfigureFile(LWDeviceHandle handle, const char* filename)
@@ -7855,7 +8170,11 @@ LWReturnCode LWGetPalletConfigureFile(LWDeviceHandle handle, const char* filenam
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetPalletConfigureFile(filename);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetPalletConfigureFile(filename);
 }
 
 LWReturnCode LWGetPalletConfigureFileToBuffer(LWDeviceHandle handle, char* buf, int32_t bufLen)
@@ -7864,7 +8183,11 @@ LWReturnCode LWGetPalletConfigureFileToBuffer(LWDeviceHandle handle, char* buf, 
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetPalletConfigureFileToBuffer(buf, bufLen);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetPalletConfigureFileToBuffer(buf, bufLen);
 }
 
 LWReturnCode LWSetPalletIdentifyType(LWDeviceHandle handle, const char* type)
@@ -7873,7 +8196,11 @@ LWReturnCode LWSetPalletIdentifyType(LWDeviceHandle handle, const char* type)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetPalletIdentifyType(type);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetPalletIdentifyType(type);
 }
 
 LWReturnCode LWGetPalletIdentifyType(LWDeviceHandle handle, char* type, int32_t len)
@@ -7882,7 +8209,11 @@ LWReturnCode LWGetPalletIdentifyType(LWDeviceHandle handle, char* type, int32_t 
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetPalletIdentifyType(type, len);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetPalletIdentifyType(type, len);
 }
 
 LWReturnCode LWSetPalletIdentifyEnable(LWDeviceHandle handle, bool enable)
@@ -7891,7 +8222,11 @@ LWReturnCode LWSetPalletIdentifyEnable(LWDeviceHandle handle, bool enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetPalletIdentifyEnable(enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetPalletIdentifyEnable(enable);
 }
 
 LWReturnCode LWGetPalletIdentifyEnable(LWDeviceHandle handle, bool* enable)
@@ -7900,7 +8235,11 @@ LWReturnCode LWGetPalletIdentifyEnable(LWDeviceHandle handle, bool* enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetPalletIdentifyEnable(*enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetPalletIdentifyEnable(*enable);
 }
 
 LWReturnCode LWSetTRSDsimilarMax(LWDeviceHandle handle, float val)
@@ -7909,7 +8248,11 @@ LWReturnCode LWSetTRSDsimilarMax(LWDeviceHandle handle, float val)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetTRSDsimilarMax(val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTRSDsimilarMax(val);
 }
 
 LWReturnCode LWGetTRSDsimilarMax(LWDeviceHandle handle, float* val)
@@ -7918,7 +8261,11 @@ LWReturnCode LWGetTRSDsimilarMax(LWDeviceHandle handle, float* val)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetTRSDsimilarMax(*val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetTRSDsimilarMax(*val);
 }
 
 LWReturnCode LWSetTRSDpstMax(LWDeviceHandle handle, float val)
@@ -7927,7 +8274,11 @@ LWReturnCode LWSetTRSDpstMax(LWDeviceHandle handle, float val)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetTRSDpstMax(val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTRSDpstMax(val);
 }
 
 LWReturnCode LWGetTRSDpstMax(LWDeviceHandle handle, float* val)
@@ -7936,7 +8287,11 @@ LWReturnCode LWGetTRSDpstMax(LWDeviceHandle handle, float* val)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetTRSDpstMax(*val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetTRSDpstMax(*val);
 }
 
 LWReturnCode LWSetCutHeight(LWDeviceHandle handle, int32_t val)
@@ -7945,7 +8300,11 @@ LWReturnCode LWSetCutHeight(LWDeviceHandle handle, int32_t val)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetCutHeight(val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetCutHeight(val);
 }
 
 LWReturnCode LWGetCutHeight(LWDeviceHandle handle, int32_t* val)
@@ -7954,7 +8313,11 @@ LWReturnCode LWGetCutHeight(LWDeviceHandle handle, int32_t* val)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetCutHeight(*val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetCutHeight(*val);
 }
 
 
@@ -7966,7 +8329,11 @@ LWReturnCode LWSendFile(LWDeviceHandle handle, const char* fullname, LWFileType 
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SendFile(fullname, type);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SendFile(fullname, type);
 }
 
 LWReturnCode LWSetDeviceSN(LWDeviceHandle handle, const char* _SN_, int size)
@@ -7975,7 +8342,11 @@ LWReturnCode LWSetDeviceSN(LWDeviceHandle handle, const char* _SN_, int size)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetDeviceSN(_SN_, size);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetDeviceSN(_SN_, size);
 }
 
 LWReturnCode LWSendOperateCommand(LWDeviceHandle handle, const char* comstr, int size)
@@ -7984,7 +8355,11 @@ LWReturnCode LWSendOperateCommand(LWDeviceHandle handle, const char* comstr, int
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SendOperateCommand(comstr, size);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SendOperateCommand(comstr, size);
 }
 
 LWReturnCode LWSetDRNU(LWDeviceHandle handle, bool enable)
@@ -7993,7 +8368,11 @@ LWReturnCode LWSetDRNU(LWDeviceHandle handle, bool enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetDRNU(enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetDRNU(enable);
 }
 
 LWReturnCode LWSetBinningMode(LWDeviceHandle handle, LWBinningMode mode)
@@ -8002,7 +8381,11 @@ LWReturnCode LWSetBinningMode(LWDeviceHandle handle, LWBinningMode mode)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetBinningMode(mode);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetBinningMode(mode);
 }
 
 //LWReturnCode LWSetResolution(LWDeviceHandle handle, LWSensorType sensorType, int32_t width, int32_t height)
@@ -8020,7 +8403,11 @@ LWReturnCode LWSetDistortionCalibration(LWDeviceHandle handle, LWSensorType sens
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetDistortionCalibration(sensorType, enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetDistortionCalibration(sensorType, enable);
 }
 
 LWReturnCode LWSetLaserWorkFrequency(LWDeviceHandle handle, const uint8_t* arr, int size)
@@ -8029,7 +8416,11 @@ LWReturnCode LWSetLaserWorkFrequency(LWDeviceHandle handle, const uint8_t* arr, 
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetLaserWorkFrequency(arr, size);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetLaserWorkFrequency(arr, size);
 }
 
 LWReturnCode LWSetAutoExposureDefaultValue(LWDeviceHandle handle, uint16_t val)
@@ -8038,7 +8429,11 @@ LWReturnCode LWSetAutoExposureDefaultValue(LWDeviceHandle handle, uint16_t val)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetAutoExposureDefaultValue(val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetAutoExposureDefaultValue(val);
 }
 
 LWReturnCode LWSetIntrinsicParam(LWDeviceHandle handle, LWSensorType sensorType, LWSensorIntrinsicParam para)
@@ -8047,7 +8442,11 @@ LWReturnCode LWSetIntrinsicParam(LWDeviceHandle handle, LWSensorType sensorType,
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetIntrinsicParam(sensorType, para);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetIntrinsicParam(sensorType, para);
 }
 
 LWReturnCode LWSetExtrinsicParam(LWDeviceHandle handle, LWSensorType sensorType, LWSensorExtrinsicParam para)
@@ -8056,7 +8455,11 @@ LWReturnCode LWSetExtrinsicParam(LWDeviceHandle handle, LWSensorType sensorType,
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetExtrinsicParam(sensorType, para);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetExtrinsicParam(sensorType, para);
 }
 
 LWReturnCode LWSetIMUExtrinsicParam(LWDeviceHandle handle, LWIMUExtrinsicParam para)
@@ -8065,7 +8468,11 @@ LWReturnCode LWSetIMUExtrinsicParam(LWDeviceHandle handle, LWIMUExtrinsicParam p
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetIMUExtrinsicParam(para);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetIMUExtrinsicParam(para);
 }
 
 LWReturnCode LWSetTemperatureCompensation(LWDeviceHandle handle, bool enable)
@@ -8074,7 +8481,11 @@ LWReturnCode LWSetTemperatureCompensation(LWDeviceHandle handle, bool enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetTemperatureCompensation(enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTemperatureCompensation(enable);
 }
 
 LWReturnCode LWGetTemperatureCompensation(LWDeviceHandle handle, bool* enable)
@@ -8083,7 +8494,11 @@ LWReturnCode LWGetTemperatureCompensation(LWDeviceHandle handle, bool* enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetTemperatureCompensation(*enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetTemperatureCompensation(*enable);
 }
 
 LWReturnCode LWSetTemperatureParams(LWDeviceHandle handle, LWTemperatureParams val)
@@ -8092,7 +8507,11 @@ LWReturnCode LWSetTemperatureParams(LWDeviceHandle handle, LWTemperatureParams v
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetTemperatureParams(val);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetTemperatureParams(val);
 }
 
 LWReturnCode LWSetLaserEnableStatus(LWDeviceHandle handle, uint32_t flag)
@@ -8101,7 +8520,11 @@ LWReturnCode LWSetLaserEnableStatus(LWDeviceHandle handle, uint32_t flag)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetLaserEnableStatus(flag);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetLaserEnableStatus(flag);
 }
 
 LWReturnCode LWGetLaserEnableStatus(LWDeviceHandle handle, uint32_t* flag)
@@ -8110,7 +8533,11 @@ LWReturnCode LWGetLaserEnableStatus(LWDeviceHandle handle, uint32_t* flag)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetLaserEnableStatus(*flag);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetLaserEnableStatus(*flag);
 }
 
 LWReturnCode LWSetDataAlignEnable(LWDeviceHandle handle, bool enable)
@@ -8119,7 +8546,11 @@ LWReturnCode LWSetDataAlignEnable(LWDeviceHandle handle, bool enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetDataSyncEnable(enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+		
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetDataSyncEnable(enable);
 }
 
 #endif
@@ -8133,7 +8564,11 @@ LW_C_API LWReturnCode LWSynchronizeDeviceSystemTime(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SynchronizeDeviceSystemTime();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SynchronizeDeviceSystemTime();
 }
 
 LW_C_API LWReturnCode LWHasSecurityAbility(LWDeviceHandle handle, bool* enable)
@@ -8142,7 +8577,11 @@ LW_C_API LWReturnCode LWHasSecurityAbility(LWDeviceHandle handle, bool* enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->HasSecurityAbility(*enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->HasSecurityAbility(*enable);
 }
 
 LW_C_API LWReturnCode LWGetSecurityEnable(LWDeviceHandle handle, bool* enable)
@@ -8151,7 +8590,11 @@ LW_C_API LWReturnCode LWGetSecurityEnable(LWDeviceHandle handle, bool* enable)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetSecurityEnable(*enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetSecurityEnable(*enable);
 }
 
 LW_C_API LWReturnCode LWSetSecurityCalibrationParams(LWDeviceHandle handle, const int32_t* _array, int32_t size)
@@ -8160,7 +8603,11 @@ LW_C_API LWReturnCode LWSetSecurityCalibrationParams(LWDeviceHandle handle, cons
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetSecurityCalibrationParams(_array, size);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetSecurityCalibrationParams(_array, size);
 }
 
 LW_C_API LWReturnCode LWSecurityCancelCalibration(LWDeviceHandle handle)
@@ -8169,7 +8616,11 @@ LW_C_API LWReturnCode LWSecurityCancelCalibration(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SecurityCancelCalibration();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SecurityCancelCalibration();
 }
 
 LW_C_API LWReturnCode LWGetSecurityCalibrationEnable(LWDeviceHandle handle, bool* enable)
@@ -8178,7 +8629,11 @@ LW_C_API LWReturnCode LWGetSecurityCalibrationEnable(LWDeviceHandle handle, bool
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetSecurityCalibrationEnable(*enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetSecurityCalibrationEnable(*enable);
 }
 
 LW_C_API LWReturnCode LWSetSecurityAxialAdjustment(LWDeviceHandle handle, int flag, float value)
@@ -8187,7 +8642,11 @@ LW_C_API LWReturnCode LWSetSecurityAxialAdjustment(LWDeviceHandle handle, int fl
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetSecurityAxialAdjustment(flag, value);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetSecurityAxialAdjustment(flag, value);
 }
 
 LW_C_API LWReturnCode LWResetSecurityConfigure(LWDeviceHandle handle)
@@ -8196,7 +8655,11 @@ LW_C_API LWReturnCode LWResetSecurityConfigure(LWDeviceHandle handle)
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->ResetSecurityConfigure();
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->ResetSecurityConfigure();
 }
 
 LW_C_API LWReturnCode LWGetSecurityCalibrationMatrixParams(LWDeviceHandle handle, float* mat, int32_t* size)
@@ -8205,7 +8668,11 @@ LW_C_API LWReturnCode LWGetSecurityCalibrationMatrixParams(LWDeviceHandle handle
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetSecurityCalibrationMatrixParams(mat, size);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetSecurityCalibrationMatrixParams(mat, size);
 }
 
 LW_C_API LWReturnCode LWGetSecurityZHSAEnable(LWDeviceHandle handle, bool* enable)
@@ -8214,7 +8681,11 @@ LW_C_API LWReturnCode LWGetSecurityZHSAEnable(LWDeviceHandle handle, bool* enabl
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetSecurityZHSAEnable(*enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetSecurityZHSAEnable(*enable);
 }
 
 LW_C_API LWReturnCode LWSetSecurityZHSAEnable(LWDeviceHandle handle, bool enable)
@@ -8223,7 +8694,11 @@ LW_C_API LWReturnCode LWSetSecurityZHSAEnable(LWDeviceHandle handle, bool enable
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetSecurityZHSAEnable(enable);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetSecurityZHSAEnable(enable);
 }
 
 LW_C_API LWReturnCode LWGetSecurityConfigFile(LWDeviceHandle handle, int type, const char* filename)
@@ -8232,7 +8707,11 @@ LW_C_API LWReturnCode LWGetSecurityConfigFile(LWDeviceHandle handle, int type, c
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetSecurityConfigFile(type, filename);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetSecurityConfigFile(type, filename);
 }
 
 LW_C_API LWReturnCode LWSetSecurityConfigFile(LWDeviceHandle handle, int type, const char* filename)
@@ -8241,7 +8720,11 @@ LW_C_API LWReturnCode LWSetSecurityConfigFile(LWDeviceHandle handle, int type, c
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetSecurityConfigFile(type, filename);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetSecurityConfigFile(type, filename);
 }
 
 LW_C_API LWReturnCode LWGetSecurityConfigFileToBuffer(LWDeviceHandle handle, int type, char* buffer, int32_t bufLen)
@@ -8250,7 +8733,11 @@ LW_C_API LWReturnCode LWGetSecurityConfigFileToBuffer(LWDeviceHandle handle, int
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->GetSecurityConfigFileToBuffer(type, buffer, bufLen);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->GetSecurityConfigFileToBuffer(type, buffer, bufLen);
 }
 
 LW_C_API LWReturnCode LWSetSecurityConfigFileFromBuffer(LWDeviceHandle handle, int type, const char* buffer, int32_t bufLen)
@@ -8259,7 +8746,11 @@ LW_C_API LWReturnCode LWSetSecurityConfigFileFromBuffer(LWDeviceHandle handle, i
 	if (ljhNS::gGlobal.numDeviceMap.find(handle) == ljhNS::gGlobal.numDeviceMap.end())
 		return LW_RETURN_HANDLE_MISMATCH;
 
-	return ljhNS::gGlobal.numDeviceMap[handle]->SetSecurityConfigFileFromBuffer(type, buffer, bufLen);
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle == nullptr) return LW_RETURN_DEVICE_INVALID;
+
+	if (ljhNS::gGlobal.numDeviceMap[handle].devHandle->handle != handle) return LW_RETURN_UNOPENED;
+
+	return ljhNS::gGlobal.numDeviceMap[handle].devHandle->SetSecurityConfigFileFromBuffer(type, buffer, bufLen);
 }
 
 

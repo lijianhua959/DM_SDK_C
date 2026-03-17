@@ -57,9 +57,11 @@ elseif(UNIX) # Linux 平台
 
 	# set(OpenCV_DIR /home/ljh/third_party_libs/opencv/arm7.5/lib/cmake/opencv4)
 	# set(OPENSSL_ROOT_DIR /home/ljh/third_party_libs/openssl/arm7.5)
+	# set(Update_ROOT_DIR /home/ljh/third_party_libs/firmware_update/arm7.5)
 
 	# set(OpenCV_DIR /home/ljh/third_party_libs/opencv/arm11.2/lib/cmake/opencv4)
 	# set(OPENSSL_ROOT_DIR /home/ljh/third_party_libs/openssl/arm11.2)
+	# set(Update_ROOT_DIR /home/ljh/third_party_libs/firmware_update/arm11.2)
 
 	find_package(Eigen3 REQUIRED)
 	find_package(OpenCV REQUIRED)

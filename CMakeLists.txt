@@ -31,7 +31,7 @@ add_compile_definitions(PATCH_VERSION=${PATCH_VAR})
 add_compile_definitions(REVISION_VERSION=${REVISION_VAR})
 add_compile_definitions(LW_INTERFACE_EXPORT)
 add_compile_definitions(NOMINMAX)
-#add_compile_definitions(LW_ZHONGRILONG_PROJ)
+# add_compile_definitions(LW_ZHONGRILONG_PROJ)
 
 
 # 包含子项目。

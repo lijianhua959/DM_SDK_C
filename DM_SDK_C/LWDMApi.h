@@ -347,30 +347,35 @@ LW_C_API LWReturnCode LWSetRgbSensorContrastRatio(LWDeviceHandle handle, int32_t
 LW_C_API LWReturnCode LWGetRgbSensorContrastRatio(LWDeviceHandle handle, int32_t* value);
 
 /// @brief 设置RGB传感器的饱和度。
+/// @note 预留接口。
 /// @param handle 设备描述符。
 /// @param value 饱和度。
 /// @return 返回码。
 LW_C_API LWReturnCode LWSetRgbSensorSaturation(LWDeviceHandle handle, int32_t value);
 
 /// @brief 获取RGB传感器的饱和度。
+/// @note 预留接口。
 /// @param handle 设备描述符。
 /// @param value 饱和度。
 /// @return 返回码。
 LW_C_API LWReturnCode LWGetRgbSensorSaturation(LWDeviceHandle handle, int32_t* value);
 
 /// @brief 设置RGB传感器的白平衡。
+/// @note 预留接口。
 /// @param handle 设备描述符。
 /// @param value 白平衡。
 /// @return 返回码。
 LW_C_API LWReturnCode LWSetRgbSensorWhiteBalance(LWDeviceHandle handle, int32_t value);
 
 /// @brief 获取RGB传感器的白平衡。
+/// @note 预留接口。
 /// @param handle 设备描述符。
 /// @param value 白平衡。
 /// @return 返回码。
 LW_C_API LWReturnCode LWGetRgbSensorWhiteBalance(LWDeviceHandle handle, int32_t* value);
 
 /// @brief 设置设备的网络配置信息。
+/// @note 设置成功后，设备会自动重启，设备描述符也会失效，因此需要重新进行设备搜索得到新的设备描述符。
 /// @param[in] handle 设备描述符。
 /// @param[in] info 网络配置信息。
 /// @return 返回码。
@@ -420,7 +425,7 @@ LW_C_API LWReturnCode LWSetHardTriggerFilterParams(LWDeviceHandle handle, int32_
 /// @return 返回码。
 LW_C_API LWReturnCode LWGetHardTriggerFilterParams(LWDeviceHandle handle, int32_t* t1, int32_t* t2);
 
-/// @brief 设置传感器的分辨率。
+/// @brief 设置传感器的分辨率，设置成功后将会断开与设备的连接，因此需要重新打开设备。
 /// @note 目前仅支持TOF传感器的可设置组合为：640*480、320*240、160*120；支持RGB传感器的可设置组合为：1600*1200、800*600、640*480。
 /// @param[in] handle 设备描述符。
 /// @param[in] sensorType 传感器类型。
@@ -464,6 +469,7 @@ LW_C_API LWReturnCode LWGetIMUExtrinsicParam(LWDeviceHandle handle, LWIMUExtrins
 LW_C_API LWReturnCode LWGetIMUData(LWDeviceHandle handle, LWIMUData* data);
 
 /// @brief 设置IMU传感器的采样频率，取值范围：50、100、120、200、500、1000、2000，默认值：120。
+/// @note 预留接口。
 /// @param[in] handle 设备描述符。
 /// @param[in] value 频率(Hz)。
 /// @return 返回码。
